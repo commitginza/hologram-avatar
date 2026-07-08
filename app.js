@@ -61,7 +61,7 @@ export async function initHologram(THREE, GLTFLoader, boot = {}) {
     currentText: '',
     captionTimer: 0,
     captionCursor: 0,
-    depthScale: Number(depthRange?.value || 1),
+    depthScale: Number(depthRange?.value || 0.62),
     glowScale: Number(glowRange?.value || 1),
     noiseScale: Number(noiseRange?.value || 0.7)
   };
@@ -151,6 +151,7 @@ export async function initHologram(THREE, GLTFLoader, boot = {}) {
       varying vec2 vUv;
       varying float vWorldY;
       varying float vMouthMask;
+      varying float vFeatureMask;
 
       float hash(vec3 p) {
         p = fract(p * 0.3183099 + vec3(0.11, 0.27, 0.39));
@@ -158,24 +159,35 @@ export async function initHologram(THREE, GLTFLoader, boot = {}) {
         return fract(p.x * p.y * p.z * (p.x + p.y + p.z));
       }
 
+      float ellipseMask(vec2 uv, vec2 center, vec2 radius) {
+        vec2 d = (uv - center) / radius;
+        return exp(-dot(d, d));
+      }
+
       void main() {
         vUv = uv;
         vec3 displaced = position;
         float scanWave = sin((position.y * 16.0) + (uTime * 3.4)) * 0.004;
-        float microNoise = (hash(position + uTime * 0.035) - 0.5) * 0.018 * uNoise;
-        displaced += normal * (scanWave + microNoise + uTalk * 0.006);
+        float microNoise = (hash(position + uTime * 0.035) - 0.5) * 0.012 * uNoise;
+        displaced += normal * (scanWave + microNoise + uTalk * 0.004);
 
-        float mouthX = (vUv.x - 0.50) / 0.18;
-        float mouthY = (vUv.y - 0.33) / 0.08;
-        float mouthMask = exp(-(mouthX * mouthX + mouthY * mouthY));
-        float jawX = (vUv.x - 0.50) / 0.26;
-        float jawY = (vUv.y - 0.24) / 0.14;
-        float jawMask = exp(-(jawX * jawX + jawY * jawY));
-        float open = clamp(uMouthOpen, 0.0, 1.0);
-        displaced.y -= jawMask * open * 0.055;
-        displaced.z += mouthMask * open * 0.028;
-        displaced.x += sign(position.x) * mouthMask * open * 0.006;
+        float mouthMask = ellipseMask(vUv, vec2(0.50, 0.33), vec2(0.16, 0.06));
+        float jawMask = ellipseMask(vUv, vec2(0.50, 0.25), vec2(0.25, 0.14));
+        float noseMask = ellipseMask(vUv, vec2(0.50, 0.47), vec2(0.10, 0.16));
+        float eyeL = ellipseMask(vUv, vec2(0.34, 0.60), vec2(0.11, 0.08));
+        float eyeR = ellipseMask(vUv, vec2(0.66, 0.60), vec2(0.11, 0.08));
+        float earL = ellipseMask(vUv, vec2(0.07, 0.53), vec2(0.07, 0.18));
+        float earR = ellipseMask(vUv, vec2(0.93, 0.53), vec2(0.07, 0.18));
+        float featureMask = max(max(noseMask, mouthMask), max(max(eyeL, eyeR), max(earL, earR)));
+        float flatten = mix(1.0, 0.14, clamp(featureMask, 0.0, 1.0));
+        displaced.z *= flatten;
+
+        float open = clamp(uMouthOpen * 1.35, 0.0, 1.0);
+        displaced.y -= jawMask * open * 0.085;
+        displaced.z += mouthMask * open * 0.040;
+        displaced.x += sign(position.x) * mouthMask * open * 0.010;
         vMouthMask = mouthMask;
+        vFeatureMask = featureMask;
 
         vec4 worldPosition = modelMatrix * vec4(displaced, 1.0);
         vec4 mvPosition = modelViewMatrix * vec4(displaced, 1.0);
@@ -190,33 +202,48 @@ export async function initHologram(THREE, GLTFLoader, boot = {}) {
       uniform float uTalk;
       uniform float uMouthOpen;
       uniform float uGlow;
-      uniform sampler2D uMap;
       varying vec3 vNormalV;
       varying vec3 vViewPos;
       varying vec2 vUv;
       varying float vWorldY;
       varying float vMouthMask;
+      varying float vFeatureMask;
+
+      float lineMask(vec2 uv, vec2 center, vec2 radius) {
+        vec2 d = (uv - center) / radius;
+        float dist2 = dot(d, d);
+        return exp(-dist2);
+      }
 
       void main() {
         vec3 N = normalize(vNormalV);
         vec3 V = normalize(vViewPos);
-        vec3 tex = texture2D(uMap, vUv).rgb;
-        float lum = dot(tex, vec3(0.299, 0.587, 0.114));
-        float subtleTexture = (0.50 - lum) * 0.075;
         float fresnel = pow(1.0 - abs(dot(N, V)), 2.15);
         float scanRaw = sin((vWorldY * 82.0) - (uTime * 10.0));
         float scan = smoothstep(0.78, 1.0, scanRaw);
         float slowBand = smoothstep(0.02, 0.18, abs(fract(vWorldY * 1.2 - uTime * 0.12) - 0.5));
 
-        float alpha = 0.060 + fresnel * 0.42 + scan * 0.040 + uTalk * 0.055;
-        alpha += subtleTexture + vMouthMask * uMouthOpen * 0.085;
-        alpha *= 0.82 + slowBand * 0.18;
-        alpha = clamp(alpha, 0.035, 0.72);
+        float mouthOpen = clamp(uMouthOpen * 1.35, 0.0, 1.0);
+        float mouthUpper = lineMask(vUv, vec2(0.50, 0.355), vec2(0.14, 0.010));
+        float mouthLower = lineMask(vUv, vec2(0.50, 0.318 - mouthOpen * 0.030), vec2(0.13, 0.012 + mouthOpen * 0.018));
+        float eyeLeft = lineMask(vUv, vec2(0.34, 0.60), vec2(0.07, 0.012));
+        float eyeRight = lineMask(vUv, vec2(0.66, 0.60), vec2(0.07, 0.012));
+        float browLeft = lineMask(vUv, vec2(0.34, 0.67), vec2(0.09, 0.010));
+        float browRight = lineMask(vUv, vec2(0.66, 0.67), vec2(0.09, 0.010));
+        float noseLine = lineMask(vUv, vec2(0.50, 0.49), vec2(0.022, 0.080)) * 0.55;
+        float faceGuide = max(max(eyeLeft, eyeRight), max(max(browLeft, browRight), max(mouthUpper, mouthLower)));
+        faceGuide = max(faceGuide, noseLine);
+
+        float alpha = 0.050 + fresnel * 0.30 + scan * 0.035 + uTalk * 0.050;
+        alpha += faceGuide * 0.11;
+        alpha *= 0.84 + slowBand * 0.16;
+        alpha = clamp(alpha, 0.035, 0.68);
 
         vec3 base = vec3(0.42, 0.92, 1.0);
-        vec3 color = base * (0.68 + fresnel * 2.25 + scan * 0.32 + uTalk * 0.24 + vMouthMask * uMouthOpen * 0.48 + subtleTexture * 0.75) * uGlow;
+        vec3 color = base * (0.62 + fresnel * 2.1 + scan * 0.28 + uTalk * 0.18 + faceGuide * 0.80) * uGlow;
         gl_FragColor = vec4(color, alpha);
       }
+    `
     `
   });
 
@@ -311,15 +338,7 @@ export async function initHologram(THREE, GLTFLoader, boot = {}) {
 
   async function loadHumanHead() {
     boot.onStatus?.('人型GLB顔モデルを取得中...');
-    const [gltf, faceMap] = await Promise.all([
-      loadGltf(MODEL_URL),
-      loadTexture(FACE_MAP_URL).catch((error) => {
-        console.warn('[hologram] face texture failed, using flat hologram texture', error);
-        return createFallbackTexture();
-      })
-    ]);
-
-    materialUniforms.uMap.value = faceMap;
+    const gltf = await loadGltf(MODEL_URL);
 
     // v4: GLB全体ではなく、頭部のメインメッシュだけを使用。
     // これにより眼球・歯・口内・不要なサブメッシュの多重発光を避ける。
@@ -516,6 +535,7 @@ export async function initHologram(THREE, GLTFLoader, boot = {}) {
     setExpression(line.expression);
     updatePreview(line);
     startCaption(line.display_text);
+    state.targetMouth = 0.55;
     const estimated = speakWithBrowser(line.speak_text, {
       onend: () => finishLine(),
       onerror: () => finishLine()
@@ -585,7 +605,7 @@ export async function initHologram(THREE, GLTFLoader, boot = {}) {
     state.mouth += (state.targetMouth - state.mouth) * Math.min(1, delta * 12);
     state.talkIntensity += ((state.active ? 1 : 0) - state.talkIntensity) * Math.min(1, delta * 5);
 
-    const open = state.mouth * state.talkIntensity;
+    const open = Math.min(1, state.mouth * state.talkIntensity * 1.55);
     materialUniforms.uTalk.value = open;
     materialUniforms.uMouthOpen.value = open;
   }
