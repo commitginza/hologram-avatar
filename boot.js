@@ -1,7 +1,7 @@
-const BOOT_VERSION = '20260708-9';
+const BOOT_VERSION = '20260708-10';
 const bootStatus = document.getElementById('bootStatus');
-console.info('[boot] version', BOOT_VERSION);
 const stage = document.getElementById('stage');
+console.info('[boot] version', BOOT_VERSION);
 
 function writeBootStatus(message, mode = 'info') {
   if (!bootStatus) return;
@@ -33,11 +33,9 @@ function getWebGlAvailability() {
     const canvas = document.createElement('canvas');
     const gl2 = canvas.getContext('webgl2', { failIfMajorPerformanceCaveat: false });
     if (gl2) return { ok: true, type: 'webgl2' };
-
     const gl = canvas.getContext('webgl', { failIfMajorPerformanceCaveat: false }) ||
       canvas.getContext('experimental-webgl', { failIfMajorPerformanceCaveat: false });
     if (gl) return { ok: true, type: 'webgl1' };
-
     return { ok: false, type: 'none', reason: 'canvas.getContext("webgl") returned null' };
   } catch (error) {
     return { ok: false, type: 'error', reason: formatError(error) };
@@ -73,7 +71,6 @@ window.addEventListener('unhandledrejection', (event) => {
 (async function boot() {
   try {
     verifyStage();
-
     const webgl = getWebGlAvailability();
     if (!webgl.ok) {
       await startCanvasFallback(new Error(`WebGL unavailable: ${webgl.reason}`));
@@ -82,23 +79,33 @@ window.addEventListener('unhandledrejection', (event) => {
 
     let THREE;
     let GLTFLoader;
+    let KTX2Loader;
+    let MeshoptDecoder;
+
     try {
-      writeBootStatus('Three.js / GLTFLoaderを読み込み中...');
-      const [threeModule, gltfModule] = await Promise.all([
+      writeBootStatus('Three.js / FaceCap用ローダーを読み込み中...');
+      const [threeModule, gltfModule, ktx2Module, meshoptModule] = await Promise.all([
         import('three'),
-        import('three/addons/loaders/GLTFLoader.js')
+        import('three/addons/loaders/GLTFLoader.js'),
+        import('three/addons/loaders/KTX2Loader.js'),
+        import('three/addons/libs/meshopt_decoder.module.js')
       ]);
       THREE = threeModule;
       GLTFLoader = gltfModule.GLTFLoader;
+      KTX2Loader = ktx2Module.KTX2Loader;
+      MeshoptDecoder = meshoptModule.MeshoptDecoder || meshoptModule.default;
     } catch (error) {
       await startCanvasFallback(error);
       return;
     }
 
     try {
-      writeBootStatus('人型ホログラム顔モデルを読み込み中...');
+      writeBootStatus('FaceCap morph targetモデルを読み込み中...');
       const app = await import(`./app.js?v=${BOOT_VERSION}`);
       await app.initHologram(THREE, GLTFLoader, {
+        KTX2Loader,
+        MeshoptDecoder,
+        version: BOOT_VERSION,
         onStatus: (message, mode = 'info') => writeBootStatus(message, mode),
         hideStatus: hideBootStatus
       });
@@ -108,7 +115,7 @@ window.addEventListener('unhandledrejection', (event) => {
       writeBootStatus(
         `<strong>ホログラム初期化に失敗しました。</strong><br>` +
         `<small>${formatError(error).replace(/\n/g, '<br>')}</small><br><br>` +
-        `<small>主な原因: GLBモデルの読み込み失敗、CDNブロック、app.jsの未アップロード、ブラウザキャッシュ。</small>`,
+        `<small>主な原因: facecap.glbの読み込み失敗、KTX2/Meshoptローダー失敗、CDNブロック、app.jsの未アップロード、ブラウザキャッシュ。</small>`,
         'error'
       );
     }
@@ -117,7 +124,7 @@ window.addEventListener('unhandledrejection', (event) => {
     writeBootStatus(
       `<strong>ホログラム初期化に失敗しました。</strong><br>` +
       `<small>${formatError(error).replace(/\n/g, '<br>')}</small><br><br>` +
-      `<small>主な原因: app.jsの未アップロード、JavaScript構文エラー、ブラウザキャッシュ。</small>`,
+      `<small>主な原因: JavaScript構文エラー、ブラウザキャッシュ、WebGL無効。</small>`,
       'error'
     );
   }
