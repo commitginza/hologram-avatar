@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Hologram AI Face Mock</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <main class="app" aria-label="ホログラムAIモック">
+    <section class="stage" aria-label="ホログラム表示エリア">
+      <canvas id="particleCanvas" class="particles" aria-hidden="true"></canvas>
+
+      <div class="room" aria-hidden="true">
+        <div class="ceiling-light"></div>
+        <div class="wall wall-left"></div>
+        <div class="wall wall-right"></div>
+        <div class="floor-grid"></div>
+      </div>
+
+      <div class="terminal" aria-hidden="true">
+        <div class="terminal-screen"></div>
+        <div class="terminal-body"></div>
+      </div>
+
+      <div id="orb" class="hologram-orb" aria-label="AIホログラム顔">
+        <div class="orb-glow"></div>
+        <div class="scanlines"></div>
+        <div class="latitude latitude-1"></div>
+        <div class="latitude latitude-2"></div>
+        <div class="longitude longitude-1"></div>
+        <div class="longitude longitude-2"></div>
+
+        <div id="face" class="face expression-neutral">
+          <div class="brow brow-left"></div>
+          <div class="brow brow-right"></div>
+          <div class="eye eye-left"><span></span></div>
+          <div class="eye eye-right"><span></span></div>
+          <div id="mouth" class="mouth mouth-rest"></div>
+          <div class="cheek cheek-left"></div>
+          <div class="cheek cheek-right"></div>
+        </div>
+      </div>
+    </section>
+
+    <aside class="panel" aria-label="会話操作パネル">
+      <div class="brand-block">
+        <p class="eyebrow">Prototype</p>
+        <h1>Hologram AI Concierge</h1>
+        <p class="lead">ボタンを押すと、AIフェイスが会話している風に発光・口パクします。</p>
+      </div>
+
+      <div class="status-card">
+        <div>
+          <span class="label">STATUS</span>
+          <strong id="statusText">standby</strong>
+        </div>
+        <div>
+          <span class="label">INTENT</span>
+          <strong id="intentText">idle</strong>
+        </div>
+      </div>
+
+      <div id="caption" class="caption" aria-live="polite">
+        「ご用件をお聞かせください。」
+      </div>
+
+      <div class="actions">
+        <button id="talkButton" type="button">会話モック再生</button>
+        <button id="stopButton" type="button" class="secondary">停止</button>
+      </div>
+
+      <label class="toggle">
+        <input id="voiceToggle" type="checkbox" checked />
+        <span>ブラウザ音声で読み上げる</span>
+      </label>
+
+      <div class="dictionary-box">
+        <span class="label">辞書モック</span>
+        <div class="chips">
+          <span>ROLEX</span>
+          <span>126500LN</span>
+          <span>デイトナ</span>
+          <span>買取</span>
+        </div>
+      </div>
+    </aside>
+  </main>
+
+  <script src="./app.js"></script>
+</body>
+</html>
