@@ -16,7 +16,6 @@ export async function initHologram(THREE, GLTFLoader, boot = {}) {
 
   const ASSET_BASE = 'https://cdn.jsdelivr.net/gh/mrdoob/three.js@r180/examples/models/gltf/LeePerrySmith/';
   const MODEL_URL = `${ASSET_BASE}LeePerrySmith.glb`;
-  const FACE_MAP_URL = `${ASSET_BASE}Map-COL.jpg`;
 
   const mockLines = [
     {
@@ -93,30 +92,6 @@ export async function initHologram(THREE, GLTFLoader, boot = {}) {
 
   const clock = new THREE.Clock();
 
-  function createFallbackTexture() {
-    const data = new Uint8Array([185, 245, 255, 255]);
-    const texture = new THREE.DataTexture(data, 1, 1, THREE.RGBAFormat);
-    texture.needsUpdate = true;
-    return texture;
-  }
-
-  function loadTexture(url) {
-    return new Promise((resolve, reject) => {
-      const loader = new THREE.TextureLoader();
-      loader.setCrossOrigin('anonymous');
-      loader.load(
-        url,
-        (texture) => {
-          texture.colorSpace = THREE.SRGBColorSpace;
-          texture.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy?.() || 1);
-          resolve(texture);
-        },
-        undefined,
-        reject
-      );
-    });
-  }
-
   function loadGltf(url) {
     return new Promise((resolve, reject) => {
       const loader = new GLTFLoader();
@@ -130,8 +105,7 @@ export async function initHologram(THREE, GLTFLoader, boot = {}) {
     uTalk: { value: 0 },
     uMouthOpen: { value: 0 },
     uGlow: { value: 1 },
-    uNoise: { value: 0.7 },
-    uMap: { value: createFallbackTexture() }
+    uNoise: { value: 0.7 }
   };
 
   const hologramMaterial = new THREE.ShaderMaterial({
@@ -243,7 +217,6 @@ export async function initHologram(THREE, GLTFLoader, boot = {}) {
         vec3 color = base * (0.62 + fresnel * 2.1 + scan * 0.28 + uTalk * 0.18 + faceGuide * 0.80) * uGlow;
         gl_FragColor = vec4(color, alpha);
       }
-    `
     `
   });
 

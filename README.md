@@ -1,8 +1,13 @@
-# Hologram AI Face - Human GLB Mock v4.1
+# Hologram AI Face v4.2.1
+
+- v4.2のJavaScript構文エラーを修正。
+- 顔の奥行きを抑え、口パクを強めた版。
+
+# Hologram AI Face - Human GLB Mock v4.2.1
 
 Three.jsで人型GLB顔モデルを読み込み、ホログラム風に表示するWebモックです。
 
-## v4.1 修正内容
+## v4.2.1 修正内容
 
 - GLB全体ではなく、頭部のメインメッシュだけを使用
 - 眼球・歯・口内などのサブメッシュによる多重発光を回避
@@ -27,4 +32,11 @@ git push
 - Windows: Ctrl + Shift + R
 - Mac: Cmd + Shift + R
 
-GitHub Pagesのキャッシュが残る場合は、URL末尾に `?v=20260708-5` を付けて確認してください。
+GitHub Pagesのキャッシュが残る場合は、URL末尾に `?v=20260708-7` を付けて確認してください。
+
+
+## v4.2.1 修正内容
+
+- app.js内の余分なテンプレートリテラルを削除し、`Unexpected identifier 'attribute'` を修正
+- boot.js / index.html のキャッシュバスターを `20260708-7` に更新
+- 顔の立体感スライダー初期値を 0.62 に設定
