@@ -1,4 +1,5 @@
 export async function initHologram(THREE, GLTFLoader, boot = {}) {
+  console.info('[app] version 20260708-9');
   const stage = document.getElementById('stage');
   const captionText = document.getElementById('captionText');
   const statusText = document.getElementById('statusText');
@@ -238,7 +239,6 @@ export async function initHologram(THREE, GLTFLoader, boot = {}) {
         gl_FragColor = vec4(color, alpha);
       }
     `
-    `
   });
 
   const wireMaterial = new THREE.LineBasicMaterial({
@@ -428,50 +428,28 @@ export async function initHologram(THREE, GLTFLoader, boot = {}) {
 
   function createBackgroundParticles(count = 240) {
     const positions = [];
-    const sizes = [];
     for (let i = 0; i < count; i += 1) {
       positions.push(
         (Math.random() - 0.5) * 9.5,
         (Math.random() - 0.5) * 6.5,
         -1.8 - Math.random() * 5.5
       );
-      sizes.push(0.5 + Math.random() * 1.0);
     }
+
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-    geometry.setAttribute('aSize', new THREE.Float32BufferAttribute(sizes, 1));
-    const material = new THREE.ShaderMaterial({
+
+    const material = new THREE.PointsMaterial({
+      color: 0xf3f8ff,
+      size: 0.018,
       transparent: true,
-      depthWrite: false,
-      blending: THREE.AdditiveBlending,
-      uniforms: {
-        uTime: { value: 0 }
-      },
-      vertexShader: `
-        attribute float aSize;
-        uniform float uTime;
-        varying float vFade;
-        void main() {
-          vec3 p = position;
-          p.y += sin(uTime * 0.25 + position.x * 1.2) * 0.025;
-          vec4 mvPosition = modelViewMatrix * vec4(p, 1.0);
-          gl_PointSize = aSize * (18.0 / -mvPosition.z);
-          gl_Position = projectionMatrix * mvPosition;
-          vFade = 0.45 + 0.35 * sin(uTime + position.x * 4.0 + position.y * 3.0);
-        }
-      `,
-      fragmentShader: `
-        varying float vFade;
-        void main() {
-          vec2 uv = gl_PointCoord - vec2(0.5);
-          float d = length(uv);
-          float alpha = smoothstep(0.5, 0.0, d) * vFade;
-          gl_FragColor = vec4(0.92, 0.97, 1.0, alpha * 0.75);
-        }
-      `
+      opacity: 0.42,
+      blending: THREE.NormalBlending,
+      depthWrite: false
     });
+
     const points = new THREE.Points(geometry, material);
-    points.userData.material = material;
+    points.userData.basePositions = positions.slice();
     return points;
   }
 
@@ -700,7 +678,19 @@ export async function initHologram(THREE, GLTFLoader, boot = {}) {
     materialUniforms.uGlow.value = state.glowScale;
     materialUniforms.uNoise.value = state.noiseScale;
 
-    backgroundParticles.userData.material.uniforms.uTime.value = elapsed;
+    if (backgroundParticles?.geometry?.attributes?.position) {
+      const pos = backgroundParticles.geometry.attributes.position;
+      const base = backgroundParticles.userData.basePositions;
+      for (let i = 0; i < pos.count; i += 1) {
+        const y = base[i * 3 + 1] + Math.sin(elapsed * 0.25 + base[i * 3] * 1.2) * 0.025;
+        pos.setY(i, y);
+      }
+      pos.needsUpdate = true;
+    }
+
+    if (backgroundParticles.userData.material) {
+      backgroundParticles.userData.material.opacity = 0.30 + Math.sin(elapsed * 0.45) * 0.04;
+    }
 
     const floatY = Math.sin(elapsed * 0.72) * 0.040;
     const yaw = Math.sin(elapsed * 0.28) * 0.040;
