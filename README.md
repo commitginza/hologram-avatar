@@ -1,15 +1,19 @@
-# Hologram AI Face Mock v2
+# Hologram AI Face - Three.js Mock
 
-HTML/CSS/JavaScriptだけで動く、ホログラムAIフェイスのWebモックです。
+Three.jsで作る、顔型ホログラムAIのWebモックです。
+CSSだけの球体・平面顔ではなく、以下を使っています。
 
-## v2の変更点
+- 手続き型の3D顔メッシュ
+- 鼻筋、鼻先、頬、顎の立体形状
+- 半透明ホログラムシェーダー
+- 顔面グリッド
+- 顔面ドット
+- 目、眉、鼻、口の3Dライン
+- 口パク風アニメーション
+- ブラウザ音声読み上げ
+- モック会話JSON
 
-- 左下に出ていた端末風オブジェクトを削除
-- 顔を丸い球体ではなく、人の顔型シルエットに変更
-- 顔の輪郭、鼻、顎、スキャンライン、ドットパターンを追加
-- 顔の真下に薄い投影ベースを追加
-
-## ローカル起動
+## ローカル確認
 
 ```bash
 python3 -m http.server 8080
@@ -21,23 +25,65 @@ python3 -m http.server 8080
 http://localhost:8080
 ```
 
+`会話モック再生` を押すと、発話・字幕・口パク・表情変更が動きます。
+
 ## GitHub Pages
 
-1. GitHubにリポジトリを作成
-2. このフォルダの中身をpush
-3. Settings > Pages > Deploy from a branch
-4. Branch: main / Folder: /(root)
-5. Save
+このフォルダの中身をGitHubリポジトリのrootに置きます。
 
-## 会話テキストの変更
+```bash
+git add .
+git commit -m "add threejs hologram face mock"
+git push
+```
 
-`app.js` の `lines` 配列を編集してください。
+GitHubで以下を設定します。
 
-## 見た目の変更
+```text
+Settings → Pages → Deploy from a branch → main → /(root)
+```
 
-`styles.css` の以下を主に調整してください。
+## 変更ポイント
 
-- `--head-path`: 顔の輪郭
-- `.hologram-head`: 顔型ホログラム本体
-- `.brow`, `.eye`, `.nose`, `.mouth`: 顔パーツ
-- `.projection-base`: 投影ベース
+### 会話文
+
+`app.js` の `mockLines` を編集してください。
+
+```js
+const mockLines = [
+  {
+    display_text: '画面に表示する文',
+    speak_text: '読み上げる文',
+    intent: 'greeting',
+    expression: 'soft_smile',
+    risk_level: 'low'
+  }
+];
+```
+
+### 顔の形
+
+`app.js` の `widthAt()` と `surfaceAtUV()` が顔の形を作っています。
+
+- `widthAt()`：輪郭、頬、顎、額の幅
+- `surfaceAtUV()`：鼻、頬、唇、顎などの凹凸
+
+### AI API接続
+
+将来的には `playLine()` に渡すJSONをAIバックエンドから取得すれば、同じ表示レイヤーを使えます。
+
+```json
+{
+  "display_text": "126500LNは、現行世代のロレックス コスモグラフ デイトナです。",
+  "speak_text": "いちにーろくごーぜろぜろえるえぬは、現行世代のロレックス コスモグラフ デイトナです。",
+  "intent": "watch_model_explanation",
+  "expression": "neutral",
+  "visual_effect": "normal_hologram",
+  "risk_level": "low",
+  "need_human_check": false
+}
+```
+
+## 注意
+
+このモックは外部CDNからThree.jsを読み込みます。GitHub Pagesではそのまま動きますが、完全オフライン運用をする場合はThree.jsをローカルに同梱してください。

@@ -3,103 +3,72 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Hologram AI Face Mock v2</title>
+  <title>Hologram AI Face - Three.js Mock</title>
+  <meta name="description" content="Three.jsで作るホログラムAIフェイスのWebモック" />
   <link rel="stylesheet" href="./styles.css" />
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://unpkg.com/three@0.180.0/build/three.module.js"
+      }
+    }
+  </script>
 </head>
 <body>
-  <main class="app" aria-label="ホログラムAIモック">
-    <section class="stage" aria-label="ホログラム表示エリア">
-      <canvas id="particleCanvas" class="particles" aria-hidden="true"></canvas>
-
-      <div class="room" aria-hidden="true">
-        <div class="ceiling-light"></div>
-        <div class="wall wall-left"></div>
-        <div class="wall wall-right"></div>
-        <div class="floor-grid"></div>
-      </div>
-
-      <div class="projection-base" aria-hidden="true">
-        <div class="base-disc"></div>
-        <div class="base-column"></div>
-      </div>
-
-      <div id="orb" class="hologram-shell" aria-label="AIホログラム顔">
-        <div class="head-aura aura-large"></div>
-        <div class="head-aura aura-small"></div>
-        <div class="data-ring ring-top"></div>
-        <div class="data-ring ring-bottom"></div>
-
-        <div class="hologram-head">
-          <div class="head-fill"></div>
-          <div class="head-outline"></div>
-          <div class="head-dots"></div>
-          <div class="head-scanlines"></div>
-          <div class="wire wire-v1"></div>
-          <div class="wire wire-v2"></div>
-          <div class="wire wire-h1"></div>
-          <div class="wire wire-h2"></div>
-
-          <div id="face" class="face expression-neutral">
-            <div class="brow brow-left"></div>
-            <div class="brow brow-right"></div>
-            <div class="eye eye-left"><span></span></div>
-            <div class="eye eye-right"><span></span></div>
-            <div class="nose"></div>
-            <div class="nose-tip"></div>
-            <div class="philtrum"></div>
-            <div id="mouth" class="mouth mouth-rest"></div>
-            <div class="cheek cheek-left"></div>
-            <div class="cheek cheek-right"></div>
-            <div class="jawline"></div>
-          </div>
-        </div>
+  <main class="app-shell">
+    <section class="stage-card" aria-label="Hologram stage">
+      <div id="stage" class="stage"></div>
+      <div class="stage-vignette" aria-hidden="true"></div>
+      <div class="caption-panel" aria-live="polite">
+        <div class="caption-label">HOLOGRAM AI CONCIERGE</div>
+        <p id="captionText">待機中です。右側の「会話モック再生」を押してください。</p>
       </div>
     </section>
 
-    <aside class="panel" aria-label="会話操作パネル">
-      <div class="brand-block">
-        <p class="eyebrow">Prototype v2</p>
-        <h1>Hologram AI Concierge</h1>
-        <p class="lead">丸い球体ではなく、人の顔型シルエットのホログラムに変更したモックです。</p>
+    <aside class="control-panel">
+      <div class="panel-header">
+        <p class="eyebrow">Prototype v3</p>
+        <h1>Three.js ホログラム顔</h1>
+        <p class="lead">CSSの平面顔ではなく、3Dの顔メッシュ、鼻筋、頬、顎、スキャンライン、粒子を使ったモックです。</p>
       </div>
 
-      <div class="status-card">
-        <div>
-          <span class="label">STATUS</span>
-          <strong id="statusText">standby</strong>
-        </div>
-        <div>
-          <span class="label">INTENT</span>
-          <strong id="intentText">idle</strong>
-        </div>
+      <div class="button-grid">
+        <button id="playBtn" type="button">会話モック再生</button>
+        <button id="oneBtn" type="button">1フレーズ再生</button>
+        <button id="stopBtn" type="button" class="secondary">停止</button>
       </div>
 
-      <div id="caption" class="caption" aria-live="polite">
-        「ご用件をお聞かせください。」
+      <label class="input-label" for="customText">任意テキスト</label>
+      <textarea id="customText" rows="4">こんにちは。私は高級腕時計のご相談をサポートするホログラムAIです。ロレックスやパテック フィリップのモデル解説、買取の流れをご案内できます。</textarea>
+      <button id="customBtn" type="button" class="wide">任意テキストで発話</button>
+
+      <div class="slider-row">
+        <label for="depthRange">顔の立体感</label>
+        <input id="depthRange" type="range" min="0.65" max="1.35" value="1" step="0.01" />
+      </div>
+      <div class="slider-row">
+        <label for="glowRange">発光量</label>
+        <input id="glowRange" type="range" min="0.65" max="1.55" value="1" step="0.01" />
+      </div>
+      <div class="slider-row">
+        <label for="noiseRange">揺らぎ</label>
+        <input id="noiseRange" type="range" min="0" max="1.8" value="0.7" step="0.01" />
       </div>
 
-      <div class="actions">
-        <button id="talkButton" type="button">会話モック再生</button>
-        <button id="stopButton" type="button" class="secondary">停止</button>
+      <div class="status-box">
+        <div><span>status</span><strong id="statusText">standby</strong></div>
+        <div><span>intent</span><strong id="intentText">idle</strong></div>
+        <div><span>expression</span><strong id="expressionText">neutral</strong></div>
       </div>
 
-      <label class="toggle">
-        <input id="voiceToggle" type="checkbox" checked />
-        <span>ブラウザ音声で読み上げる</span>
-      </label>
-
-      <div class="dictionary-box">
-        <span class="label">辞書モック</span>
-        <div class="chips">
-          <span>ROLEX</span>
-          <span>126500LN</span>
-          <span>デイトナ</span>
-          <span>買取</span>
-        </div>
-      </div>
+      <details open>
+        <summary>次にAI APIへつなぐ想定JSON</summary>
+        <pre id="jsonPreview"></pre>
+      </details>
     </aside>
   </main>
 
-  <script src="./app.js"></script>
+  <noscript>このモックを動かすにはJavaScriptを有効にしてください。</noscript>
+  <script type="module" src="./app.js"></script>
 </body>
 </html>
