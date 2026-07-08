@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Hologram AI Face Mock</title>
+  <title>Hologram AI Face Mock v2</title>
   <link rel="stylesheet" href="./styles.css" />
 </head>
 <body>
@@ -18,36 +18,49 @@
         <div class="floor-grid"></div>
       </div>
 
-      <div class="terminal" aria-hidden="true">
-        <div class="terminal-screen"></div>
-        <div class="terminal-body"></div>
+      <div class="projection-base" aria-hidden="true">
+        <div class="base-disc"></div>
+        <div class="base-column"></div>
       </div>
 
-      <div id="orb" class="hologram-orb" aria-label="AIホログラム顔">
-        <div class="orb-glow"></div>
-        <div class="scanlines"></div>
-        <div class="latitude latitude-1"></div>
-        <div class="latitude latitude-2"></div>
-        <div class="longitude longitude-1"></div>
-        <div class="longitude longitude-2"></div>
+      <div id="orb" class="hologram-shell" aria-label="AIホログラム顔">
+        <div class="head-aura aura-large"></div>
+        <div class="head-aura aura-small"></div>
+        <div class="data-ring ring-top"></div>
+        <div class="data-ring ring-bottom"></div>
 
-        <div id="face" class="face expression-neutral">
-          <div class="brow brow-left"></div>
-          <div class="brow brow-right"></div>
-          <div class="eye eye-left"><span></span></div>
-          <div class="eye eye-right"><span></span></div>
-          <div id="mouth" class="mouth mouth-rest"></div>
-          <div class="cheek cheek-left"></div>
-          <div class="cheek cheek-right"></div>
+        <div class="hologram-head">
+          <div class="head-fill"></div>
+          <div class="head-outline"></div>
+          <div class="head-dots"></div>
+          <div class="head-scanlines"></div>
+          <div class="wire wire-v1"></div>
+          <div class="wire wire-v2"></div>
+          <div class="wire wire-h1"></div>
+          <div class="wire wire-h2"></div>
+
+          <div id="face" class="face expression-neutral">
+            <div class="brow brow-left"></div>
+            <div class="brow brow-right"></div>
+            <div class="eye eye-left"><span></span></div>
+            <div class="eye eye-right"><span></span></div>
+            <div class="nose"></div>
+            <div class="nose-tip"></div>
+            <div class="philtrum"></div>
+            <div id="mouth" class="mouth mouth-rest"></div>
+            <div class="cheek cheek-left"></div>
+            <div class="cheek cheek-right"></div>
+            <div class="jawline"></div>
+          </div>
         </div>
       </div>
     </section>
 
     <aside class="panel" aria-label="会話操作パネル">
       <div class="brand-block">
-        <p class="eyebrow">Prototype</p>
+        <p class="eyebrow">Prototype v2</p>
         <h1>Hologram AI Concierge</h1>
-        <p class="lead">ボタンを押すと、AIフェイスが会話している風に発光・口パクします。</p>
+        <p class="lead">丸い球体ではなく、人の顔型シルエットのホログラムに変更したモックです。</p>
       </div>
 
       <div class="status-card">
