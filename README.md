@@ -1,13 +1,14 @@
-# Hologram AI Face - Three.js Mock v1.1
+# Hologram AI Face - Human GLB Mock v2
 
-GitHub Pagesで動かすためのThree.js版ホログラム顔モックです。
+Three.jsで人型GLB顔モデルを読み込み、青白いホログラムシェーダー、ワイヤーフレーム、粒子、スキャンライン、口パク風オーバーレイを重ねたWebモックです。
 
-## v1.1の修正点
+## 変更点
 
-- `importmap`依存をやめて、`boot.js`でThree.jsを動的読み込みします。
-- `jsDelivr → unpkg → esm.sh` の順にCDNをフォールバックします。
-- 初期化失敗時に、画面中央へエラーを表示します。
-- `app.js`をキャッシュバスター付きで読み込みます。
+- 手続き型の自作顔メッシュを廃止
+- Three.js公式サンプルの LeePerrySmith GLB を読み込み
+- 顔テクスチャをシェーダーに渡して、目・鼻・口のディテールをホログラム化
+- 既存の会話モック再生、字幕、ブラウザ読み上げ、JSONプレビューは維持
+- WebGL不可環境では Canvas 2D フォールバック
 
 ## ファイル構成
 
@@ -16,8 +17,10 @@ index.html
 styles.css
 boot.js
 app.js
-.nojekyll
+fallback.js
+webgl-check.html
 README.md
+.nojekyll
 ```
 
 ## ローカル確認
@@ -26,36 +29,26 @@ README.md
 python3 -m http.server 8080
 ```
 
-ブラウザで開きます。
-
 ```text
 http://localhost:8080
 ```
 
-## GitHub Pages反映
+## GitHub Pages
 
-既存リポジトリ直下に全ファイルを上書きします。
+リポジトリ直下に上記ファイルを置き、Settings → Pages で main / root を公開元にしてください。
 
-```bash
-git add .
-git commit -m "fix threejs boot loader"
-git push
+## 顔モデルについて
+
+このモックでは検証用にThree.js examplesの LeePerrySmith モデルをCDNから読み込んでいます。商用・本番用途では、権利が明確なオリジナルまたは購入済みGLBモデルへ差し替えてください。
+
+差し替え箇所は `app.js` の以下です。
+
+```js
+const ASSET_BASE = 'https://cdn.jsdelivr.net/gh/mrdoob/three.js@r180/examples/models/gltf/LeePerrySmith/';
+const MODEL_URL = `${ASSET_BASE}LeePerrySmith.glb`;
+const FACE_MAP_URL = `${ASSET_BASE}Map-COL.jpg`;
 ```
 
-反映後、ブラウザで強制更新してください。
+## 口パクについて
 
-- macOS: `Cmd + Shift + R`
-- Windows: `Ctrl + Shift + R`
-
-## それでも動かない場合
-
-ブラウザのDevToolsを開いて、ConsoleとNetworkを確認してください。
-
-主に見るもの:
-
-- `boot.js` が 200 で読めているか
-- `app.js?v=20260708-2` が 200 で読めているか
-- `three.module.min.js` が 200 で読めているか
-- WebGL related error が出ていないか
-
-CDNが会社ネットワークや広告ブロッカーでブロックされている場合、Three.jsをローカル配置する構成に切り替えてください。
+LeePerrySmithモデルには口のBlendShapeがないため、今回は口元にホログラムの口パク用オーバーレイを重ねています。本格的なリップシンクを行う場合は、A/I/U/E/O または jawOpen などのモーフターゲットを持つGLB/VRMモデルに置き換えてください。

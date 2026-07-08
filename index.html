@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Hologram AI Face - Three.js Mock</title>
+  <title>Hologram AI Face - Human GLB Mock v2</title>
   <meta name="description" content="Three.jsで作るホログラムAIフェイスのWebモック" />
   <link rel="stylesheet" href="./styles.css" />
 </head>
@@ -22,9 +22,9 @@
 
     <aside class="control-panel">
       <div class="panel-header">
-        <p class="eyebrow">Prototype v3</p>
+        <p class="eyebrow">Prototype v4</p>
         <h1>Three.js ホログラム顔</h1>
-        <p class="lead">CSSの平面顔ではなく、3Dの顔メッシュ、鼻筋、頬、顎、スキャンライン、粒子を使ったモックです。</p>
+        <p class="lead">人型GLB顔モデルをホログラムシェーダーで表示します。WebGL不可環境ではCanvas 2Dフォールバックで会話モックを動かします。</p>
       </div>
 
       <div class="button-grid">
@@ -64,6 +64,14 @@
   </main>
 
   <noscript>このモックを動かすにはJavaScriptを有効にしてください。</noscript>
-  <script type="module" src="./boot.js?v=20260708-2"></script>
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.min.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/"
+      }
+    }
+  </script>
+  <script type="module" src="./boot.js?v=20260708-4"></script>
 </body>
 </html>

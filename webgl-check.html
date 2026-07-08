@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>WebGL Check</title>
+  <style>
+    body { margin: 0; background: #020812; color: #d9fbff; font-family: system-ui, sans-serif; padding: 24px; line-height: 1.8; }
+    pre { background: rgba(143,246,255,.08); border: 1px solid rgba(143,246,255,.2); border-radius: 12px; padding: 16px; overflow: auto; }
+    .ok { color: #8ff6ff; } .ng { color: #ff97b7; }
+  </style>
+</head>
+<body>
+  <h1>WebGL Check</h1>
+  <p id="summary">checking...</p>
+  <pre id="result"></pre>
+  <script>
+    const canvas = document.createElement('canvas');
+    const result = { userAgent: navigator.userAgent };
+    function inspect(type) {
+      try {
+        const gl = canvas.getContext(type, { failIfMajorPerformanceCaveat: false });
+        if (!gl) return { available: false };
+        const debug = gl.getExtension('WEBGL_debug_renderer_info');
+        return {
+          available: true,
+          version: gl.getParameter(gl.VERSION),
+          shadingLanguageVersion: gl.getParameter(gl.SHADING_LANGUAGE_VERSION),
+          vendor: debug ? gl.getParameter(debug.UNMASKED_VENDOR_WEBGL) : gl.getParameter(gl.VENDOR),
+          renderer: debug ? gl.getParameter(debug.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER)
+        };
+      } catch (error) {
+        return { available: false, error: String(error) };
+      }
+    }
+    result.webgl2 = inspect('webgl2');
+    result.webgl1 = inspect('webgl');
+    const ok = result.webgl2.available || result.webgl1.available;
+    document.getElementById('summary').innerHTML = ok ? '<span class="ok">WebGL is available.</span>' : '<span class="ng">WebGL is NOT available.</span>';
+    document.getElementById('result').textContent = JSON.stringify(result, null, 2);
+  </script>
+</body>
+</html>

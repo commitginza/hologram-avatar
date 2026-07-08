@@ -326,3 +326,9 @@ pre {
 .boot-status[hidden] {
   display: none;
 }
+
+.boot-status[data-mode="warning"] {
+  border-color: rgba(255, 211, 126, 0.42);
+  color: #fff4d8;
+  box-shadow: 0 0 34px rgba(255, 211, 126, 0.11);
+}
