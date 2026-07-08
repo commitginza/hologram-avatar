@@ -1,5 +1,5 @@
 export async function initHologram(THREE, GLTFLoader, boot = {}) {
-  const APP_VERSION = '20260708-11';
+  const APP_VERSION = '20260708-12';
   console.info('[app] version', APP_VERSION);
 
   const stage = document.getElementById('stage');
@@ -19,10 +19,24 @@ export async function initHologram(THREE, GLTFLoader, boot = {}) {
 
   const MODEL_URL = 'https://cdn.jsdelivr.net/gh/mrdoob/three.js@r180/examples/models/gltf/facecap.glb';
   const KTX2_TRANSCODER_PATH = 'https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/libs/basis/';
-  // FaceCapモデルには眼球・歯・口内などの別メッシュが含まれます。
-  // これを表示すると白い塊として目や口が濃く見えるため、v5.1では頭部メッシュだけを表示します。
+
+  // FaceCapには眼球・歯・口内などの内部パーツがあるため、基本は頭部メッシュだけ表示します。
   const FACE_ONLY_MODE = true;
 
+  // 口は歯を見せず、目と同じように“穴”として見せるための前面レイヤーです。
+  // 位置がずれる場合は y / z / patchWidth / width / openHeight を調整してください。
+  const MOUTH_HOLE = {
+    x: 0.0,
+    y: -0.43,
+    z: 0.74,
+    patchWidth: 0.78,
+    patchHeight: 0.40,
+    width: 0.50,
+    closedHeight: 0.026,
+    openHeight: 0.185,
+    lipGap: 0.018,
+    lipThickness: 0.007
+  };
 
   const mockLines = [
     {
@@ -127,7 +141,7 @@ export async function initHologram(THREE, GLTFLoader, boot = {}) {
     transparent: true,
     opacity: 0.50,
     emissive: 0xffffff,
-    emissiveIntensity: 0.018,
+    emissiveIntensity: 0.035,
     side: THREE.FrontSide,
     depthWrite: false
   });
@@ -157,6 +171,11 @@ export async function initHologram(THREE, GLTFLoader, boot = {}) {
   let headMesh = null;
   let morphDict = {};
   let morphInfluences = [];
+  let mouthOverlay = null;
+  let mouthPatch = null;
+  let mouthHole = null;
+  let mouthUpperLip = null;
+  let mouthLowerLip = null;
   const morphIndexCache = new Map();
 
   function createBackgroundParticles(count = 150) {
@@ -332,8 +351,8 @@ export async function initHologram(THREE, GLTFLoader, boot = {}) {
     object.traverse((child) => {
       if (!child.isMesh) return;
 
-      // 頭部のmorph targetメッシュだけを残す。
-      // 眼球・歯・舌・口内メッシュを非表示にすることで、目と口は「穴」として見える。
+      // 眼球・歯・舌・口内などの別メッシュは非表示。
+      // 目は穴として見え、口は後述の mouthOverlay で穴＋唇として描画します。
       if (child !== visibleHeadMesh) {
         child.visible = false;
         return;
@@ -345,6 +364,122 @@ export async function initHologram(THREE, GLTFLoader, boot = {}) {
       child.material.depthWrite = false;
       child.frustumCulled = false;
     });
+  }
+
+  function createEllipseGeometry(segments = 72) {
+    const shape = new THREE.Shape();
+    for (let i = 0; i <= segments; i += 1) {
+      const a = (i / segments) * Math.PI * 2;
+      const x = Math.cos(a) * 0.5;
+      const y = Math.sin(a) * 0.5;
+      if (i === 0) shape.moveTo(x, y);
+      else shape.lineTo(x, y);
+    }
+    shape.closePath();
+    return new THREE.ShapeGeometry(shape);
+  }
+
+  function createLipGeometry(isUpper = true) {
+    const shape = new THREE.Shape();
+    const width = 1.0;
+    const height = 0.16;
+    const thickness = 0.034;
+    const points = [];
+
+    for (let i = 0; i <= 42; i += 1) {
+      const t = i / 42;
+      const x = (t - 0.5) * width;
+      const arch = Math.sin(t * Math.PI) * height;
+      const y = (isUpper ? arch : -arch);
+      points.push(new THREE.Vector2(x, y));
+    }
+    for (let i = 42; i >= 0; i -= 1) {
+      const t = i / 42;
+      const x = (t - 0.5) * width;
+      const arch = Math.sin(t * Math.PI) * height;
+      const y = (isUpper ? arch - thickness : -arch + thickness);
+      points.push(new THREE.Vector2(x, y));
+    }
+
+    points.forEach((pt, index) => {
+      if (index === 0) shape.moveTo(pt.x, pt.y);
+      else shape.lineTo(pt.x, pt.y);
+    });
+    shape.closePath();
+    return new THREE.ShapeGeometry(shape);
+  }
+
+  function createMouthOverlay() {
+    const group = new THREE.Group();
+    group.name = 'mouth-hole-overlay';
+    group.position.set(MOUTH_HOLE.x, MOUTH_HOLE.y, MOUTH_HOLE.z);
+    group.renderOrder = 80;
+
+    const patchMaterial = new THREE.MeshBasicMaterial({
+      color: 0xaeb3b8,
+      transparent: true,
+      opacity: 0.82,
+      depthTest: false,
+      depthWrite: false,
+      side: THREE.DoubleSide
+    });
+    const holeMaterial = new THREE.MeshBasicMaterial({
+      color: 0x020407,
+      transparent: true,
+      opacity: 0.96,
+      depthTest: false,
+      depthWrite: false,
+      side: THREE.DoubleSide
+    });
+    const lipMaterial = new THREE.MeshBasicMaterial({
+      color: 0xf6f8fa,
+      transparent: true,
+      opacity: 0.64,
+      depthTest: false,
+      depthWrite: false,
+      side: THREE.DoubleSide
+    });
+
+    mouthPatch = new THREE.Mesh(createEllipseGeometry(), patchMaterial);
+    mouthPatch.name = 'mouth-skin-patch';
+    mouthPatch.scale.set(MOUTH_HOLE.patchWidth, MOUTH_HOLE.patchHeight, 1);
+    mouthPatch.renderOrder = 80;
+
+    mouthHole = new THREE.Mesh(createEllipseGeometry(), holeMaterial);
+    mouthHole.name = 'mouth-hole';
+    mouthHole.scale.set(MOUTH_HOLE.width, MOUTH_HOLE.closedHeight, 1);
+    mouthHole.position.z = 0.003;
+    mouthHole.renderOrder = 81;
+
+    mouthUpperLip = new THREE.Mesh(createLipGeometry(true), lipMaterial.clone());
+    mouthUpperLip.name = 'upper-lip-line';
+    mouthUpperLip.scale.set(MOUTH_HOLE.width, 0.17, 1);
+    mouthUpperLip.position.set(0, MOUTH_HOLE.lipGap, 0.006);
+    mouthUpperLip.renderOrder = 82;
+
+    mouthLowerLip = new THREE.Mesh(createLipGeometry(false), lipMaterial.clone());
+    mouthLowerLip.name = 'lower-lip-line';
+    mouthLowerLip.scale.set(MOUTH_HOLE.width, 0.17, 1);
+    mouthLowerLip.position.set(0, -MOUTH_HOLE.lipGap, 0.006);
+    mouthLowerLip.renderOrder = 82;
+
+    group.add(mouthPatch, mouthHole, mouthUpperLip, mouthLowerLip);
+    return group;
+  }
+
+  function updateMouthOverlay(open) {
+    if (!mouthOverlay || !mouthHole || !mouthUpperLip || !mouthLowerLip || !mouthPatch) return;
+    const amount = THREE.MathUtils.clamp(open, 0, 1);
+    const holeHeight = MOUTH_HOLE.closedHeight + MOUTH_HOLE.openHeight * amount;
+
+    mouthHole.scale.set(MOUTH_HOLE.width * (1 + amount * 0.08), holeHeight, 1);
+    mouthHole.material.opacity = 0.94 + amount * 0.06;
+
+    mouthUpperLip.position.y = MOUTH_HOLE.lipGap + amount * 0.028;
+    mouthLowerLip.position.y = -MOUTH_HOLE.lipGap - amount * 0.075;
+    mouthLowerLip.scale.y = 0.17 + amount * 0.09;
+
+    mouthPatch.material.opacity = 0.80 + amount * 0.08;
   }
 
   async function loadFaceCapModel() {
@@ -361,6 +496,9 @@ export async function initHologram(THREE, GLTFLoader, boot = {}) {
     applyFaceOnlyMode(modelRoot, headMesh);
     fitModelToStage(modelRoot);
     faceGroup.add(modelRoot);
+
+    mouthOverlay = createMouthOverlay();
+    faceGroup.add(mouthOverlay);
 
     morphDict = headMesh.morphTargetDictionary || {};
     morphInfluences = headMesh.morphTargetInfluences || [];
@@ -379,7 +517,7 @@ export async function initHologram(THREE, GLTFLoader, boot = {}) {
       speak_text: line.speak_text,
       intent: line.intent,
       expression: line.expression,
-      visual_effect: 'white_hologram_morph_target',
+      visual_effect: 'white_hologram_hollow_mouth',
       risk_level: line.risk_level,
       need_human_check: line.risk_level !== 'low'
     };
@@ -483,6 +621,7 @@ export async function initHologram(THREE, GLTFLoader, boot = {}) {
     clearInterval(state.mouthInterval);
     state.active = false;
     state.targetMouth = 0;
+    updateMouthOverlay(0);
     setStatus('standby', state.intent);
   }
 
@@ -532,6 +671,7 @@ export async function initHologram(THREE, GLTFLoader, boot = {}) {
     state.active = false;
     state.targetMouth = 0;
     clearInterval(state.mouthInterval);
+    updateMouthOverlay(0);
     stopSpeech();
     setStatus('standby', 'idle');
     captionText.textContent = '停止しました。';
@@ -561,15 +701,16 @@ export async function initHologram(THREE, GLTFLoader, boot = {}) {
 
     clearMorphTargets();
 
-    // 口パク本体: FaceCapモデルの本物のmorph targetを使う
-    setMorph(['jawOpen', 'mouthOpen'], open * 1.18);
-    setMorph(['mouthFunnel'], open * 0.10);
-    setMorph(['mouthPucker'], open * 0.04);
-    setMorph(['mouthClose'], 0.0);
-    setMorph(['mouthSmile_L', 'mouthSmileLeft'], smile);
-    setMorph(['mouthSmile_R', 'mouthSmileRight'], smile);
-    setMorph(['mouthDimple_L', 'mouthDimpleLeft'], smile * 0.25);
-    setMorph(['mouthDimple_R', 'mouthDimpleRight'], smile * 0.25);
+    // 歯を見せないため、モデル本体の口は閉じ気味にして、前面の穴＋唇で口パクを見せる
+    setMorph(['jawOpen', 'mouthOpen'], open * 0.10);
+    setMorph(['mouthFunnel'], open * 0.03);
+    setMorph(['mouthPucker'], open * 0.02);
+    setMorph(['mouthClose'], 0.86);
+    setMorph(['mouthSmile_L', 'mouthSmileLeft'], smile * 0.35);
+    setMorph(['mouthSmile_R', 'mouthSmileRight'], smile * 0.35);
+    setMorph(['mouthDimple_L', 'mouthDimpleLeft'], smile * 0.10);
+    setMorph(['mouthDimple_R', 'mouthDimpleRight'], smile * 0.10);
+    updateMouthOverlay(open);
 
     // 表情
     setMorph(['browInnerUp'], thinking * 0.45 + serious * 0.12);
@@ -591,6 +732,7 @@ export async function initHologram(THREE, GLTFLoader, boot = {}) {
     const talking = state.talkIntensity;
     faceGroup.traverse((child) => {
       if (!child.isMesh || !child.material || child.visible === false) return;
+      if (mouthOverlay && mouthOverlay.children.includes(child)) return;
       const targetOpacity = 0.50 + talking * 0.08;
       child.material.opacity += (targetOpacity - child.material.opacity) * Math.min(1, delta * 4);
       if ('emissiveIntensity' in child.material) child.material.emissiveIntensity = (0.012 + talking * 0.026) * glow;
