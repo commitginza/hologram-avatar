@@ -1,70 +1,52 @@
-# Hologram AI Face - FaceCap Morph Target Mock v5.3
+# Hologram AI Face - v5.5 Bust + Real Mouth Motion
 
-three.js の `webgl_morphtargets_face.html` に近い構成へ寄せた版です。
-`facecap.glb` を読み込み、`mesh_2` の `morphTargetDictionary` / `morphTargetInfluences` を使って、口・目・眉を動かします。
+FaceCap morph targetモデルを使ったホログラム顔モックです。
 
-## v5.3の主な変更
+## v5.5 の主な変更
 
-- LeePerrySmithからFaceCapモデルへ変更
-- 疑似口スリットではなく、`jawOpen` などのmorph targetで口を開閉
-- ワイヤー表示なし
-- 白基調、薄い影、透明感で表示
-- GitHub Pages向けの静的構成
+- 胸上部まで表示する簡易バストメッシュを追加
+- 歯が表示されていた時と同じ方向で `jawOpen` / `mouthOpen` の動きを復活
+- 歯・口内メッシュは非表示のまま
+- 黒い口穴オーバーレイで歯の表示だけを隠す
+- ワイヤーなし、白基調
 
-## 反映手順
-
-ZIPの中身をGitHubリポジトリ直下へ上書きしてpushしてください。
+## 反映
 
 ```bash
 git add .
-git commit -m "switch to facecap morph target model"
+git commit -m "add bust and real mouth motion"
 git push
 ```
 
-反映後、ブラウザで強制更新してください。
-
-- Windows: Ctrl + Shift + R
-- Mac: Cmd + Shift + R
-
-Consoleに以下が出ればv5.3です。
+ブラウザは強制更新してください。
 
 ```text
-[boot] version 20260708-13
-[app] version 20260708-13
+Windows: Ctrl + Shift + R
+Mac: Cmd + Shift + R
 ```
 
-## 口パク調整
+Consoleに以下が出ればv5.5です。
 
-`app.js` の `updateMorphTargets()` 内を調整します。
+```text
+[boot] version 20260708-15
+[app] version 20260708-15
+```
+
+## 口の動き調整
+
+`app.js` の `MOUTH_MORPH` を調整してください。
 
 ```js
-setMorph(['jawOpen', 'mouthOpen'], open * 0.88);
-setMorph(['mouthFunnel'], open * 0.14);
-setMorph(['mouthPucker'], open * 0.06);
+const MOUTH_MORPH = {
+  jawOpenScale: 0.88,
+  funnelScale: 0.14,
+  puckerScale: 0.06,
+  lowerDownScale: 0.18,
+  upperUpScale: 0.05,
+  overlayScale: 1.00
+};
 ```
 
-もっと口を開く場合:
+## 胸上部の調整
 
-```js
-setMorph(['jawOpen', 'mouthOpen'], open * 1.00);
-```
-
-## 白基調の見た目調整
-
-`app.js` の `faceMaterial` を調整します。
-
-```js
-const faceMaterial = new THREE.MeshPhysicalMaterial({
-  color: 0xf8fbff,
-  transparent: true,
-  opacity: 0.56,
-  emissive: 0xffffff,
-  emissiveIntensity: 0.035
-});
-```
-
-
-## v5.3
-- 肌色の口パッチと太い唇メッシュを削除。
-- 口は黒い穴 + 細い縁取りだけで表現。
-- FaceCap本体の口はほぼ閉じたままにして、歯が出にくい設定に変更。
+`app.js` の `BUST_CONFIG` を調整してください。

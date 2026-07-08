@@ -1,5 +1,5 @@
 export async function initHologram(THREE, GLTFLoader, boot = {}) {
-  const APP_VERSION = '20260708-13';
+  const APP_VERSION = '20260708-15';
   console.info('[app] version', APP_VERSION);
 
   const stage = document.getElementById('stage');
@@ -28,11 +28,46 @@ export async function initHologram(THREE, GLTFLoader, boot = {}) {
   const MOUTH_HOLE = {
     x: 0.0,
     y: -0.405,
-    z: 0.82,
-    width: 0.46,
+    z: 0.84,
+    width: 0.48,
     closedHeight: 0.020,
-    openHeight: 0.145,
-    rimOpacity: 0.52
+    openHeight: 0.170,
+    rimOpacity: 0.46
+  };
+
+  // 歯が見えていた頃と同じように、FaceCap本体のjawOpen/mouthOpenを使って口を開きます。
+  // 歯は非表示/黒い穴で隠しつつ、口周辺の自然な開閉モーフだけ復活させます。
+  const MOUTH_MOTION = {
+    jawOpenStrength: 0.86,
+    mouthFunnelStrength: 0.10,
+    mouthPuckerStrength: 0.035,
+    smileDuringSpeech: 0.08,
+    overlayOpenScale: 1.0
+  };
+
+  // 歯が見えていた時のような「本来の口が開く動き」に戻すための係数です。
+  // 歯・口内メッシュは非表示のまま、jawOpen / mouthOpen だけ強く動かします。
+  const MOUTH_MORPH = {
+    jawOpenScale: 0.88,
+    funnelScale: 0.14,
+    puckerScale: 0.06,
+    lowerDownScale: 0.18,
+    upperUpScale: 0.05,
+    overlayScale: 1.00
+  };
+
+  // FaceCapモデル自体はほぼ頭部のみなので、胸上部はホログラム用の簡易バスト形状を追加します。
+  // 位置・サイズを変える場合はここを調整してください。
+  const BUST_CONFIG = {
+    enabled: true,
+    y: -1.24,
+    z: -0.02,
+    height: 1.05,
+    neckWidth: 0.20,
+    shoulderWidth: 1.28,
+    neckDepth: 0.13,
+    shoulderDepth: 0.36,
+    opacity: 0.30
   };
 
   const mockLines = [
@@ -105,14 +140,14 @@ export async function initHologram(THREE, GLTFLoader, boot = {}) {
   scene.fog = new THREE.FogExp2(0x05080c, 0.055);
 
   const camera = new THREE.PerspectiveCamera(36, stage.clientWidth / stage.clientHeight, 0.1, 100);
-  camera.position.set(0, 0.22, 4.25);
+  camera.position.set(0, 0.08, 5.55);
 
   const root = new THREE.Group();
   root.position.set(0, -0.05, 0);
   scene.add(root);
 
   const faceGroup = new THREE.Group();
-  faceGroup.position.y = 0.15;
+  faceGroup.position.y = 0.42;
   root.add(faceGroup);
 
   const clock = new THREE.Clock();
@@ -164,11 +199,24 @@ export async function initHologram(THREE, GLTFLoader, boot = {}) {
     depthWrite: false
   });
 
+  const bustMaterial = new THREE.MeshPhysicalMaterial({
+    color: 0xf4f7fb,
+    roughness: 0.48,
+    metalness: 0.0,
+    transparent: true,
+    opacity: BUST_CONFIG.opacity,
+    emissive: 0xffffff,
+    emissiveIntensity: 0.014,
+    depthWrite: false,
+    side: THREE.FrontSide
+  });
+
   let modelRoot = null;
   let headMesh = null;
   let morphDict = {};
   let morphInfluences = [];
   let mouthOverlay = null;
+  let bustGroup = null;
   let mouthHole = null;
   let mouthRim = null;
   const morphIndexCache = new Map();
@@ -224,7 +272,7 @@ export async function initHologram(THREE, GLTFLoader, boot = {}) {
   scene.add(backgroundParticles);
 
   const baseGroup = new THREE.Group();
-  baseGroup.position.set(0, -1.58, 0);
+  baseGroup.position.set(0, -2.18, 0);
   root.add(baseGroup);
   const baseDisc = new THREE.Mesh(
     new THREE.CylinderGeometry(0.46, 0.46, 0.018, 96, 1, true),
@@ -439,6 +487,79 @@ export async function initHologram(THREE, GLTFLoader, boot = {}) {
     mouthRim.material.opacity = MOUTH_HOLE.rimOpacity + amount * 0.12;
   }
 
+  function smooth01(t) {
+    const v = THREE.MathUtils.clamp(t, 0, 1);
+    return v * v * (3 - 2 * v);
+  }
+
+  function createBustGeometry(radialSegments = 96, heightSegments = 34) {
+    const positions = [];
+    const normals = [];
+    const uvs = [];
+    const indices = [];
+
+    for (let iy = 0; iy <= heightSegments; iy += 1) {
+      const t = iy / heightSegments;
+      const shoulder = smooth01((t - 0.18) / 0.72);
+      const lowerTaper = 1.0 - Math.max(0, (t - 0.78) / 0.22) * 0.10;
+      const width = (BUST_CONFIG.neckWidth * (1 - shoulder) + BUST_CONFIG.shoulderWidth * shoulder) * lowerTaper;
+      const depth = BUST_CONFIG.neckDepth * (1 - shoulder) + BUST_CONFIG.shoulderDepth * shoulder;
+      const y = -t * BUST_CONFIG.height;
+
+      for (let ix = 0; ix <= radialSegments; ix += 1) {
+        const a = (ix / radialSegments) * Math.PI * 2;
+        const ca = Math.cos(a);
+        const sa = Math.sin(a);
+        const frontLift = Math.max(0, sa) * shoulder * 0.035;
+        positions.push(ca * width, y, sa * depth + frontLift);
+        normals.push(ca, 0.15, sa);
+        uvs.push(ix / radialSegments, t);
+      }
+    }
+
+    const row = radialSegments + 1;
+    for (let iy = 0; iy < heightSegments; iy += 1) {
+      for (let ix = 0; ix < radialSegments; ix += 1) {
+        const a = iy * row + ix;
+        const b = a + 1;
+        const c = a + row;
+        const d = c + 1;
+        indices.push(a, c, b, b, c, d);
+      }
+    }
+
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+    geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+    geometry.setIndex(indices);
+    geometry.computeVertexNormals();
+    return geometry;
+  }
+
+  function createBust() {
+    const group = new THREE.Group();
+    group.name = 'procedural-upper-bust';
+    group.position.set(0, BUST_CONFIG.y, BUST_CONFIG.z);
+
+    const bust = new THREE.Mesh(createBustGeometry(), bustMaterial.clone());
+    bust.name = 'upper-bust-shell';
+    bust.renderOrder = 0;
+    group.add(bust);
+
+    const collar = new THREE.Mesh(
+      new THREE.TorusGeometry(0.34, 0.006, 8, 96),
+      new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.10, depthWrite: false })
+    );
+    collar.name = 'soft-collar-hint';
+    collar.position.set(0, -0.24, 0.17);
+    collar.scale.set(1.25, 0.34, 1);
+    collar.rotation.x = Math.PI / 2;
+    group.add(collar);
+
+    return group;
+  }
+
   async function loadFaceCapModel() {
     boot.onStatus?.('FaceCap morph targetモデルを取得中...');
     const gltf = await loadGltf(MODEL_URL);
@@ -453,6 +574,11 @@ export async function initHologram(THREE, GLTFLoader, boot = {}) {
     applyFaceOnlyMode(modelRoot, headMesh);
     fitModelToStage(modelRoot);
     faceGroup.add(modelRoot);
+
+    if (BUST_CONFIG.enabled) {
+      bustGroup = createBust();
+      faceGroup.add(bustGroup);
+    }
 
     mouthOverlay = createMouthOverlay();
     faceGroup.add(mouthOverlay);
@@ -658,17 +784,21 @@ export async function initHologram(THREE, GLTFLoader, boot = {}) {
 
     clearMorphTargets();
 
-    // 歯を見せないため、モデル本体の口はほぼ閉じたままにする。
-    // 見た目上の口パクは、前面の黒い穴だけで表現する。
-    setMorph(['jawOpen', 'mouthOpen'], open * 0.015);
-    setMorph(['mouthFunnel'], 0.0);
-    setMorph(['mouthPucker'], 0.0);
-    setMorph(['mouthClose'], 1.0);
+    // v5.5: 歯が見えていた版と同じ方向で、本来のmorph targetを使って口を開閉する。
+    // 歯・口内メッシュは非表示のままなので、見た目は黒い口穴として残ります。
+    setMorph(['jawOpen', 'mouthOpen'], open * MOUTH_MORPH.jawOpenScale);
+    setMorph(['mouthFunnel'], open * MOUTH_MORPH.funnelScale);
+    setMorph(['mouthPucker'], open * MOUTH_MORPH.puckerScale);
+    setMorph(['mouthLowerDown_L', 'mouthLowerDownLeft'], open * MOUTH_MORPH.lowerDownScale);
+    setMorph(['mouthLowerDown_R', 'mouthLowerDownRight'], open * MOUTH_MORPH.lowerDownScale);
+    setMorph(['mouthUpperUp_L', 'mouthUpperUpLeft'], open * MOUTH_MORPH.upperUpScale);
+    setMorph(['mouthUpperUp_R', 'mouthUpperUpRight'], open * MOUTH_MORPH.upperUpScale);
+    setMorph(['mouthClose'], 0.0);
     setMorph(['mouthSmile_L', 'mouthSmileLeft'], smile * 0.18);
     setMorph(['mouthSmile_R', 'mouthSmileRight'], smile * 0.18);
     setMorph(['mouthDimple_L', 'mouthDimpleLeft'], smile * 0.06);
     setMorph(['mouthDimple_R', 'mouthDimpleRight'], smile * 0.06);
-    updateMouthOverlay(open);
+    updateMouthOverlay(Math.min(1, open * MOUTH_MORPH.overlayScale));
 
     // 表情
     setMorph(['browInnerUp'], thinking * 0.45 + serious * 0.12);
@@ -717,11 +847,14 @@ export async function initHologram(THREE, GLTFLoader, boot = {}) {
 
     const floatY = Math.sin(elapsed * 0.72) * 0.026;
     const yaw = Math.sin(elapsed * 0.22) * 0.028;
-    faceGroup.position.y = 0.15 + floatY;
+    faceGroup.position.y = 0.42 + floatY;
     faceGroup.rotation.y = yaw;
 
     if (modelRoot) {
       modelRoot.scale.z = state.depthScale;
+    }
+    if (bustGroup) {
+      bustGroup.scale.z = state.depthScale;
     }
 
     baseDisc.scale.setScalar(1 + Math.sin(elapsed * 1.7) * 0.035 + state.talkIntensity * 0.06);
