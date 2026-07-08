@@ -283,15 +283,15 @@ export async function initHologram(THREE, GLTFLoader, boot = {}) {
     mesh.material = hologramMaterial;
     mesh.renderOrder = 1;
 
-    const wire = new THREE.LineSegments(new THREE.WireframeGeometry(mesh.geometry), wireMaterial);
-    wire.renderOrder = 2;
-    wire.scale.setScalar(1.0015);
-    mesh.add(wire);
+    //const wire = new THREE.LineSegments(new THREE.WireframeGeometry(mesh.geometry), wireMaterial);
+    //wire.renderOrder = 2;
+    //wire.scale.setScalar(1.0015);
+    //mesh.add(wire);
 
-    const points = new THREE.Points(mesh.geometry, pointsMaterial);
-    points.renderOrder = 3;
-    points.scale.setScalar(1.003);
-    mesh.add(points);
+    //const points = new THREE.Points(mesh.geometry, pointsMaterial);
+    //points.renderOrder = 3;
+    //points.scale.setScalar(1.003);
+    //mesh.add(points);
   }
 
   function collectMeshes(object) {
