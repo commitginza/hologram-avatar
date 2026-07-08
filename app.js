@@ -202,36 +202,37 @@ export async function initHologram(THREE, GLTFLoader, boot = {}) {
         vec3 V = normalize(vViewPos);
         vec3 tex = texture2D(uMap, vUv).rgb;
         float lum = dot(tex, vec3(0.299, 0.587, 0.114));
-        float darkDetail = 1.0 - smoothstep(0.18, 0.82, lum);
-        float fresnel = pow(1.0 - abs(dot(N, V)), 2.0);
+        float subtleTexture = (0.50 - lum) * 0.075;
+        float fresnel = pow(1.0 - abs(dot(N, V)), 2.15);
         float scanRaw = sin((vWorldY * 82.0) - (uTime * 10.0));
         float scan = smoothstep(0.78, 1.0, scanRaw);
         float slowBand = smoothstep(0.02, 0.18, abs(fract(vWorldY * 1.2 - uTime * 0.12) - 0.5));
 
-        float alpha = 0.055 + fresnel * 0.34 + darkDetail * 0.18 + scan * 0.045 + uTalk * 0.070;
-        alpha += vMouthMask * uMouthOpen * 0.10;
-        alpha *= 0.80 + slowBand * 0.20;
-        alpha = clamp(alpha, 0.035, 0.78);
+        float alpha = 0.060 + fresnel * 0.42 + scan * 0.040 + uTalk * 0.055;
+        alpha += subtleTexture + vMouthMask * uMouthOpen * 0.085;
+        alpha *= 0.82 + slowBand * 0.18;
+        alpha = clamp(alpha, 0.035, 0.72);
 
         vec3 base = vec3(0.42, 0.92, 1.0);
-        vec3 color = base * (0.62 + fresnel * 2.05 + darkDetail * 0.78 + scan * 0.34 + uTalk * 0.28 + vMouthMask * uMouthOpen * 0.55) * uGlow;
+        vec3 color = base * (0.68 + fresnel * 2.25 + scan * 0.32 + uTalk * 0.24 + vMouthMask * uMouthOpen * 0.48 + subtleTexture * 0.75) * uGlow;
         gl_FragColor = vec4(color, alpha);
       }
-    `  });
+    `
+  });
 
   const wireMaterial = new THREE.LineBasicMaterial({
     color: 0x91f6ff,
     transparent: true,
-    opacity: 0.145,
+    opacity: 0.095,
     blending: THREE.AdditiveBlending,
     depthWrite: false
   });
 
   const pointsMaterial = new THREE.PointsMaterial({
     color: 0xb5fbff,
-    size: 0.012,
+    size: 0.009,
     transparent: true,
-    opacity: 0.22,
+    opacity: 0.135,
     blending: THREE.AdditiveBlending,
     depthWrite: false
   });
@@ -268,6 +269,46 @@ export async function initHologram(THREE, GLTFLoader, boot = {}) {
     mesh.add(points);
   }
 
+  function collectMeshes(object) {
+    const meshes = [];
+    object.traverse((child) => {
+      if (child.isMesh && child.geometry) meshes.push(child);
+    });
+    return meshes;
+  }
+
+  function selectPrimaryHeadMesh(object) {
+    const meshes = collectMeshes(object);
+    if (!meshes.length) throw new Error('GLB内に表示可能なMeshが見つかりません。');
+
+    // 眼球・歯・口内などの小さいサブメッシュまでホログラム化すると、
+    // 目や口が多重に発光して見える。最大バウンディングボックスのメッシュだけを頭部として使う。
+    let best = meshes[0];
+    let bestScore = -Infinity;
+    for (const mesh of meshes) {
+      mesh.geometry.computeBoundingBox();
+      const box = mesh.geometry.boundingBox;
+      const size = box.getSize(new THREE.Vector3());
+      const volume = size.x * size.y * size.z;
+      const vertexCount = mesh.geometry.attributes.position?.count || 0;
+      const score = volume * 1000 + vertexCount;
+      if (score > bestScore) {
+        best = mesh;
+        bestScore = score;
+      }
+    }
+
+    console.info('[hologram] selected primary mesh:', best.name || '(unnamed)', 'from', meshes.length, 'meshes');
+
+    const group = new THREE.Group();
+    const mesh = best.clone(false);
+    mesh.geometry = best.geometry.clone();
+    mesh.geometry.computeVertexNormals();
+    decorateMesh(mesh);
+    group.add(mesh);
+    return group;
+  }
+
   async function loadHumanHead() {
     boot.onStatus?.('人型GLB顔モデルを取得中...');
     const [gltf, faceMap] = await Promise.all([
@@ -280,14 +321,9 @@ export async function initHologram(THREE, GLTFLoader, boot = {}) {
 
     materialUniforms.uMap.value = faceMap;
 
-    modelContent = gltf.scene;
-    modelContent.traverse((child) => {
-      if (child.isMesh) {
-        child.geometry.computeVertexNormals();
-        decorateMesh(child);
-      }
-    });
-
+    // v4: GLB全体ではなく、頭部のメインメッシュだけを使用。
+    // これにより眼球・歯・口内・不要なサブメッシュの多重発光を避ける。
+    modelContent = selectPrimaryHeadMesh(gltf.scene);
     fitModelToStage(modelContent);
     modelBaseScale.copy(modelContent.scale);
     faceModelRoot.add(modelContent);
