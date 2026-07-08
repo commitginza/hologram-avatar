@@ -1,5 +1,5 @@
 export async function initHologram(THREE, GLTFLoader, boot = {}) {
-  const APP_VERSION = '20260708-10';
+  const APP_VERSION = '20260708-11';
   console.info('[app] version', APP_VERSION);
 
   const stage = document.getElementById('stage');
@@ -19,6 +19,10 @@ export async function initHologram(THREE, GLTFLoader, boot = {}) {
 
   const MODEL_URL = 'https://cdn.jsdelivr.net/gh/mrdoob/three.js@r180/examples/models/gltf/facecap.glb';
   const KTX2_TRANSCODER_PATH = 'https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/libs/basis/';
+  // FaceCapモデルには眼球・歯・口内などの別メッシュが含まれます。
+  // これを表示すると白い塊として目や口が濃く見えるため、v5.1では頭部メッシュだけを表示します。
+  const FACE_ONLY_MODE = true;
+
 
   const mockLines = [
     {
@@ -121,9 +125,9 @@ export async function initHologram(THREE, GLTFLoader, boot = {}) {
     transmission: 0.0,
     thickness: 0.10,
     transparent: true,
-    opacity: 0.56,
+    opacity: 0.50,
     emissive: 0xffffff,
-    emissiveIntensity: 0.035,
+    emissiveIntensity: 0.018,
     side: THREE.FrontSide,
     depthWrite: false
   });
@@ -315,10 +319,28 @@ export async function initHologram(THREE, GLTFLoader, boot = {}) {
   function applyWhiteHologramMaterials(object) {
     object.traverse((child) => {
       if (!child.isMesh) return;
-      const name = String(child.name || '').toLowerCase();
-      if (name.includes('eye')) child.material = eyeMaterial.clone();
-      else if (name.includes('teeth') || name.includes('tongue') || name.includes('mouth')) child.material = shadowMaterial.clone();
-      else child.material = faceMaterial.clone();
+      child.material = faceMaterial.clone();
+      child.material.transparent = true;
+      child.material.depthWrite = false;
+      child.frustumCulled = false;
+    });
+  }
+
+  function applyFaceOnlyMode(object, visibleHeadMesh) {
+    if (!FACE_ONLY_MODE || !visibleHeadMesh) return;
+
+    object.traverse((child) => {
+      if (!child.isMesh) return;
+
+      // 頭部のmorph targetメッシュだけを残す。
+      // 眼球・歯・舌・口内メッシュを非表示にすることで、目と口は「穴」として見える。
+      if (child !== visibleHeadMesh) {
+        child.visible = false;
+        return;
+      }
+
+      child.visible = true;
+      child.material = faceMaterial.clone();
       child.material.transparent = true;
       child.material.depthWrite = false;
       child.frustumCulled = false;
@@ -330,17 +352,20 @@ export async function initHologram(THREE, GLTFLoader, boot = {}) {
     const gltf = await loadGltf(MODEL_URL);
     modelRoot = gltf.scene;
     applyWhiteHologramMaterials(modelRoot);
-    fitModelToStage(modelRoot);
-    faceGroup.add(modelRoot);
 
     headMesh = findHeadMesh(modelRoot);
     if (!headMesh) {
       throw new Error('morphTargetDictionaryを持つ顔メッシュが見つかりません。');
     }
 
+    applyFaceOnlyMode(modelRoot, headMesh);
+    fitModelToStage(modelRoot);
+    faceGroup.add(modelRoot);
+
     morphDict = headMesh.morphTargetDictionary || {};
     morphInfluences = headMesh.morphTargetInfluences || [];
     console.info('[hologram] morph target head:', headMesh.name, Object.keys(morphDict));
+    console.info('[hologram] face only mode:', FACE_ONLY_MODE);
 
     // 初期表情を少し柔らかくする
     clearMorphTargets();
@@ -537,9 +562,9 @@ export async function initHologram(THREE, GLTFLoader, boot = {}) {
     clearMorphTargets();
 
     // 口パク本体: FaceCapモデルの本物のmorph targetを使う
-    setMorph(['jawOpen', 'mouthOpen'], open * 0.88);
-    setMorph(['mouthFunnel'], open * 0.14);
-    setMorph(['mouthPucker'], open * 0.06);
+    setMorph(['jawOpen', 'mouthOpen'], open * 1.18);
+    setMorph(['mouthFunnel'], open * 0.10);
+    setMorph(['mouthPucker'], open * 0.04);
     setMorph(['mouthClose'], 0.0);
     setMorph(['mouthSmile_L', 'mouthSmileLeft'], smile);
     setMorph(['mouthSmile_R', 'mouthSmileRight'], smile);
@@ -565,9 +590,10 @@ export async function initHologram(THREE, GLTFLoader, boot = {}) {
     const glow = state.glowScale;
     const talking = state.talkIntensity;
     faceGroup.traverse((child) => {
-      if (!child.isMesh || !child.material) return;
-      child.material.opacity += (((child.material === shadowMaterial) ? 0.42 : 0.54 + talking * 0.06) - child.material.opacity) * Math.min(1, delta * 4);
-      if ('emissiveIntensity' in child.material) child.material.emissiveIntensity = (0.025 + talking * 0.035) * glow;
+      if (!child.isMesh || !child.material || child.visible === false) return;
+      const targetOpacity = 0.50 + talking * 0.08;
+      child.material.opacity += (targetOpacity - child.material.opacity) * Math.min(1, delta * 4);
+      if ('emissiveIntensity' in child.material) child.material.emissiveIntensity = (0.012 + talking * 0.026) * glow;
     });
   }
 
