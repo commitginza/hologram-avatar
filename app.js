@@ -223,8 +223,8 @@ export async function initHologram(THREE, GLTFLoader, boot = {}) {
         float faceGuide = max(max(eyeLeft, eyeRight), max(max(browLeft, browRight), noseLine));
 
         float shadow = 1.0 - ndl;
-        vec3 whiteBase = vec3(0.93, 0.965, 1.0);
-        vec3 shadowTone = vec3(0.095, 0.12, 0.15);
+        vec3 whiteBase = vec3(1.0, 1.0, 1.0);
+        vec3 shadowTone = vec3(0.1, 0.1, 0.1);
         vec3 color = mix(shadowTone, whiteBase, 0.55 + ndl * 0.45);
         color += vec3(1.0) * fresnel * 0.28;
         color += vec3(0.85, 0.96, 1.0) * scan * 0.10;
@@ -242,7 +242,7 @@ export async function initHologram(THREE, GLTFLoader, boot = {}) {
   });
 
   const wireMaterial = new THREE.LineBasicMaterial({
-    color: 0xf4fbff,
+    color: 0xffffff,
     transparent: true,
     opacity: 0.075,
     blending: THREE.NormalBlending,
