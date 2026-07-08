@@ -152,8 +152,21 @@ export async function initHologram(THREE, GLTFLoader, boot = {}) {
         float eyeR = ellipseMask(vUv, vec2(0.66, 0.60), vec2(0.11, 0.08));
         float earL = ellipseMask(vUv, vec2(0.07, 0.53), vec2(0.07, 0.18));
         float earR = ellipseMask(vUv, vec2(0.93, 0.53), vec2(0.07, 0.18));
-        float featureMask = max(max(noseMask, mouthMask), max(max(eyeL, eyeR), max(earL, earR)));
-        float flatten = mix(1.0, 0.14, clamp(featureMask, 0.0, 1.0));
+        // 個別に立体を制御
+        float eyeMask = max(eyeL, eyeR);
+        float earMask = max(earL, earR);
+
+        float noseDepth = 0.06;
+        float eyeDepth = 0.08;
+        float earDepth = 0.04;
+        float mouthDepth = 0.04;
+
+        float flatten = 1.0;
+        flatten = mix(flatten, noseDepth, clamp(noseMask, 0.0, 1.0));
+        flatten = mix(flatten, eyeDepth, clamp(eyeMask, 0.0, 1.0));
+        flatten = mix(flatten, earDepth, clamp(earMask, 0.0, 1.0));
+        flatten = mix(flatten, mouthDepth, clamp(mouthMask, 0.0, 1.0));
+
         displaced.z *= flatten;
 
         float open = clamp(uMouthOpen * 1.35, 0.0, 1.0);
