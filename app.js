@@ -81,10 +81,10 @@ export async function initHologram(THREE, GLTFLoader, boot = {}) {
   scene.fog = new THREE.FogExp2(0x020812, 0.075);
 
   const camera = new THREE.PerspectiveCamera(34, stage.clientWidth / stage.clientHeight, 0.1, 100);
-  camera.position.set(0, 0.03, 6.6);
+  camera.position.set(0, 0.18, 5.6);
 
   const root = new THREE.Group();
-  root.position.y = 0.02;
+  root.position.y = -0.08;
   scene.add(root);
 
   const faceGroup = new THREE.Group();
@@ -128,6 +128,7 @@ export async function initHologram(THREE, GLTFLoader, boot = {}) {
   const materialUniforms = {
     uTime: { value: 0 },
     uTalk: { value: 0 },
+    uMouthOpen: { value: 0 },
     uGlow: { value: 1 },
     uNoise: { value: 0.7 },
     uMap: { value: createFallbackTexture() }
@@ -143,11 +144,13 @@ export async function initHologram(THREE, GLTFLoader, boot = {}) {
     vertexShader: `
       uniform float uTime;
       uniform float uTalk;
+      uniform float uMouthOpen;
       uniform float uNoise;
       varying vec3 vNormalV;
       varying vec3 vViewPos;
       varying vec2 vUv;
       varying float vWorldY;
+      varying float vMouthMask;
 
       float hash(vec3 p) {
         p = fract(p * 0.3183099 + vec3(0.11, 0.27, 0.39));
@@ -162,6 +165,18 @@ export async function initHologram(THREE, GLTFLoader, boot = {}) {
         float microNoise = (hash(position + uTime * 0.035) - 0.5) * 0.018 * uNoise;
         displaced += normal * (scanWave + microNoise + uTalk * 0.006);
 
+        float mouthX = (vUv.x - 0.50) / 0.18;
+        float mouthY = (vUv.y - 0.33) / 0.08;
+        float mouthMask = exp(-(mouthX * mouthX + mouthY * mouthY));
+        float jawX = (vUv.x - 0.50) / 0.26;
+        float jawY = (vUv.y - 0.24) / 0.14;
+        float jawMask = exp(-(jawX * jawX + jawY * jawY));
+        float open = clamp(uMouthOpen, 0.0, 1.0);
+        displaced.y -= jawMask * open * 0.055;
+        displaced.z += mouthMask * open * 0.028;
+        displaced.x += sign(position.x) * mouthMask * open * 0.006;
+        vMouthMask = mouthMask;
+
         vec4 worldPosition = modelMatrix * vec4(displaced, 1.0);
         vec4 mvPosition = modelViewMatrix * vec4(displaced, 1.0);
         vWorldY = worldPosition.y;
@@ -173,12 +188,14 @@ export async function initHologram(THREE, GLTFLoader, boot = {}) {
     fragmentShader: `
       uniform float uTime;
       uniform float uTalk;
+      uniform float uMouthOpen;
       uniform float uGlow;
       uniform sampler2D uMap;
       varying vec3 vNormalV;
       varying vec3 vViewPos;
       varying vec2 vUv;
       varying float vWorldY;
+      varying float vMouthMask;
 
       void main() {
         vec3 N = normalize(vNormalV);
@@ -192,15 +209,15 @@ export async function initHologram(THREE, GLTFLoader, boot = {}) {
         float slowBand = smoothstep(0.02, 0.18, abs(fract(vWorldY * 1.2 - uTime * 0.12) - 0.5));
 
         float alpha = 0.055 + fresnel * 0.34 + darkDetail * 0.18 + scan * 0.045 + uTalk * 0.070;
+        alpha += vMouthMask * uMouthOpen * 0.10;
         alpha *= 0.80 + slowBand * 0.20;
         alpha = clamp(alpha, 0.035, 0.78);
 
         vec3 base = vec3(0.42, 0.92, 1.0);
-        vec3 color = base * (0.62 + fresnel * 2.05 + darkDetail * 0.78 + scan * 0.34 + uTalk * 0.28) * uGlow;
+        vec3 color = base * (0.62 + fresnel * 2.05 + darkDetail * 0.78 + scan * 0.34 + uTalk * 0.28 + vMouthMask * uMouthOpen * 0.55) * uGlow;
         gl_FragColor = vec4(color, alpha);
       }
-    `
-  });
+    `  });
 
   const wireMaterial = new THREE.LineBasicMaterial({
     color: 0x91f6ff,
@@ -219,41 +236,18 @@ export async function initHologram(THREE, GLTFLoader, boot = {}) {
     depthWrite: false
   });
 
-  const glowFeatureMaterial = new THREE.MeshBasicMaterial({
-    color: 0xd9ffff,
-    transparent: true,
-    opacity: 0.60,
-    blending: THREE.AdditiveBlending,
-    depthWrite: false,
-    side: THREE.DoubleSide
-  });
-
-  const dimFeatureMaterial = new THREE.MeshBasicMaterial({
-    color: 0x83eaff,
-    transparent: true,
-    opacity: 0.28,
-    blending: THREE.AdditiveBlending,
-    depthWrite: false,
-    side: THREE.DoubleSide
-  });
-
   const faceModelRoot = new THREE.Group();
   faceGroup.add(faceModelRoot);
 
   let modelContent = null;
   const modelBaseScale = new THREE.Vector3(1, 1, 1);
-  let mouthGroup = null;
-  let mouthInner = null;
-  let mouthUpper = null;
-  let mouthLower = null;
-  let mouthInnerMaterial = null;
   let expressionTiltGroup = new THREE.Group();
 
   function fitModelToStage(object) {
     const box = new THREE.Box3().setFromObject(object);
     const size = box.getSize(new THREE.Vector3());
     const center = box.getCenter(new THREE.Vector3());
-    const targetHeight = 3.55;
+    const targetHeight = 3.20;
     const scale = targetHeight / Math.max(size.y, 0.0001);
     object.scale.setScalar(scale);
     object.position.set(-center.x * scale, -center.y * scale + 0.02, -center.z * scale);
@@ -272,71 +266,6 @@ export async function initHologram(THREE, GLTFLoader, boot = {}) {
     points.renderOrder = 3;
     points.scale.setScalar(1.003);
     mesh.add(points);
-  }
-
-  function createCurveTube(points, radius = 0.006, material = glowFeatureMaterial, tubularSegments = 36) {
-    const curve = new THREE.CatmullRomCurve3(points);
-    const geometry = new THREE.TubeGeometry(curve, tubularSegments, radius, 8, false);
-    return new THREE.Mesh(geometry, material);
-  }
-
-  function createMouthOverlay() {
-    const group = new THREE.Group();
-    group.position.set(0, -0.51, 0.86);
-    group.rotation.x = 0.02;
-
-    const upperPoints = [];
-    const lowerPoints = [];
-    for (let i = 0; i <= 42; i += 1) {
-      const t = i / 42;
-      const x = (t - 0.5) * 0.56;
-      const arch = Math.sin(t * Math.PI);
-      upperPoints.push(new THREE.Vector3(x, 0.018 + arch * 0.032, 0));
-      lowerPoints.push(new THREE.Vector3(x, -0.018 - arch * 0.030, 0));
-    }
-
-    mouthUpper = createCurveTube(upperPoints, 0.0065, glowFeatureMaterial, 42);
-    mouthLower = createCurveTube(lowerPoints, 0.0065, glowFeatureMaterial, 42);
-
-    const shape = new THREE.Shape();
-    for (let i = 0; i <= 48; i += 1) {
-      const a = (i / 48) * Math.PI * 2;
-      const x = Math.cos(a) * 0.22;
-      const y = Math.sin(a) * 0.026;
-      if (i === 0) shape.moveTo(x, y);
-      else shape.lineTo(x, y);
-    }
-
-    mouthInnerMaterial = new THREE.MeshBasicMaterial({
-      color: 0x7ff3ff,
-      transparent: true,
-      opacity: 0.20,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-      side: THREE.DoubleSide
-    });
-
-    mouthInner = new THREE.Mesh(new THREE.ShapeGeometry(shape), mouthInnerMaterial);
-    mouthInner.position.z = 0.004;
-    mouthInner.scale.set(1, 0.42, 1);
-
-    group.add(mouthInner, mouthUpper, mouthLower);
-    return group;
-  }
-
-  function createEyeGlow(x) {
-    const shape = new THREE.Shape();
-    for (let i = 0; i <= 48; i += 1) {
-      const a = (i / 48) * Math.PI * 2;
-      const px = Math.cos(a) * 0.055;
-      const py = Math.sin(a) * 0.012;
-      if (i === 0) shape.moveTo(px, py);
-      else shape.lineTo(px, py);
-    }
-    const eye = new THREE.Mesh(new THREE.ShapeGeometry(shape), dimFeatureMaterial.clone());
-    eye.position.set(x, 0.31, 0.84);
-    eye.rotation.x = 0.02;
-    return eye;
   }
 
   async function loadHumanHead() {
@@ -366,41 +295,10 @@ export async function initHologram(THREE, GLTFLoader, boot = {}) {
     expressionTiltGroup = new THREE.Group();
     expressionTiltGroup.position.set(0, 0, 0);
     faceGroup.add(expressionTiltGroup);
-
-    mouthGroup = createMouthOverlay();
-    expressionTiltGroup.add(mouthGroup);
-
-    const eyeLeft = createEyeGlow(-0.23);
-    const eyeRight = createEyeGlow(0.23);
-    expressionTiltGroup.add(eyeLeft, eyeRight);
   }
-
-  const haloMaterial = new THREE.MeshBasicMaterial({
-    color: 0x79eaff,
-    transparent: true,
-    opacity: 0.13,
-    blending: THREE.AdditiveBlending,
-    depthWrite: false,
-    side: THREE.DoubleSide
-  });
-
-  function createEllipseRing(radiusX, radiusY, y, z, rotationX = Math.PI / 2) {
-    const curve = new THREE.EllipseCurve(0, 0, radiusX, radiusY, 0, Math.PI * 2, false, 0);
-    const points = curve.getPoints(180).map((p) => new THREE.Vector3(p.x, 0, p.y));
-    const curve3 = new THREE.CatmullRomCurve3(points, true);
-    const ring = new THREE.Mesh(new THREE.TubeGeometry(curve3, 180, 0.004, 6, true), haloMaterial);
-    ring.position.set(0, y, z);
-    ring.rotation.x = rotationX;
-    return ring;
-  }
-
-  const halo1 = createEllipseRing(1.45, 0.52, 0.48, -0.06, Math.PI / 2);
-  const halo2 = createEllipseRing(1.20, 0.42, -0.22, -0.05, Math.PI / 2);
-  const halo3 = createEllipseRing(0.94, 0.30, -0.96, -0.02, Math.PI / 2);
-  root.add(halo1, halo2, halo3);
 
   const baseGroup = new THREE.Group();
-  baseGroup.position.set(0, -1.86, 0);
+  baseGroup.position.set(0, -1.72, 0);
   root.add(baseGroup);
   const baseDisc = new THREE.Mesh(
     new THREE.CylinderGeometry(0.44, 0.44, 0.022, 96, 1, true),
@@ -499,15 +397,9 @@ export async function initHologram(THREE, GLTFLoader, boot = {}) {
     const thinking = expression === 'thinking';
     const smile = expression === 'soft_smile';
 
-    if (mouthUpper && mouthLower && mouthInnerMaterial) {
-      mouthUpper.scale.y = smile ? 0.75 : serious ? 0.60 : 1.0;
-      mouthLower.scale.y = smile ? 1.25 : serious ? 0.72 : 1.0;
-      mouthInnerMaterial.opacity = serious ? 0.16 : smile ? 0.26 : 0.20;
-    }
-
     if (expressionTiltGroup) {
-      expressionTiltGroup.rotation.z = THREE.MathUtils.degToRad(thinking ? -1.5 : serious ? 1.0 : 0);
-      expressionTiltGroup.position.y = smile ? 0.012 : serious ? -0.010 : 0;
+      expressionTiltGroup.rotation.z = THREE.MathUtils.degToRad(thinking ? -1.3 : serious ? 0.8 : 0);
+      expressionTiltGroup.position.y = smile ? 0.010 : serious ? -0.008 : 0;
     }
   }
 
@@ -658,15 +550,8 @@ export async function initHologram(THREE, GLTFLoader, boot = {}) {
     state.talkIntensity += ((state.active ? 1 : 0) - state.talkIntensity) * Math.min(1, delta * 5);
 
     const open = state.mouth * state.talkIntensity;
-    if (mouthInner && mouthUpper && mouthLower && mouthInnerMaterial) {
-      mouthInner.scale.y = 0.42 + open * 4.4;
-      mouthInner.scale.x = 0.88 + open * 0.16;
-      mouthInnerMaterial.opacity = 0.14 + open * 0.36;
-      mouthLower.position.y = -open * 0.070;
-      mouthUpper.position.y = open * 0.012;
-    }
-
     materialUniforms.uTalk.value = open;
+    materialUniforms.uMouthOpen.value = open;
   }
 
   function resize() {
@@ -700,18 +585,6 @@ export async function initHologram(THREE, GLTFLoader, boot = {}) {
     if (modelContent) {
       modelContent.scale.z = modelBaseScale.z * state.depthScale;
     }
-    if (expressionTiltGroup) {
-      expressionTiltGroup.scale.z = state.depthScale;
-    }
-
-    const pulse = 1 + Math.sin(elapsed * 2.1) * 0.035 + state.talkIntensity * 0.045;
-    halo1.rotation.z = elapsed * 0.08;
-    halo2.rotation.z = -elapsed * 0.07;
-    halo3.rotation.z = elapsed * 0.05;
-    halo1.scale.setScalar(pulse);
-    halo2.scale.setScalar(1 + Math.sin(elapsed * 1.55) * 0.025);
-    halo3.scale.setScalar(1 + Math.sin(elapsed * 1.20) * 0.020);
-
     pointLight.intensity = (2.45 + state.talkIntensity * 1.3 + Math.sin(elapsed * 2.8) * 0.18) * state.glowScale;
     baseDisc.scale.setScalar(1 + Math.sin(elapsed * 1.7) * 0.055 + state.talkIntensity * 0.08);
     baseCone.material.opacity = 0.055 + state.talkIntensity * 0.055;
