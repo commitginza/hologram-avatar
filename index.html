@@ -6,18 +6,13 @@
   <title>Hologram AI Face - Three.js Mock</title>
   <meta name="description" content="Three.jsで作るホログラムAIフェイスのWebモック" />
   <link rel="stylesheet" href="./styles.css" />
-  <script type="importmap">
-    {
-      "imports": {
-        "three": "https://unpkg.com/three@0.180.0/build/three.module.js"
-      }
-    }
-  </script>
 </head>
 <body>
   <main class="app-shell">
     <section class="stage-card" aria-label="Hologram stage">
-      <div id="stage" class="stage"></div>
+      <div id="stage" class="stage">
+        <div id="bootStatus" class="boot-status" role="status">Three.jsを読み込み中...</div>
+      </div>
       <div class="stage-vignette" aria-hidden="true"></div>
       <div class="caption-panel" aria-live="polite">
         <div class="caption-label">HOLOGRAM AI CONCIERGE</div>
@@ -69,6 +64,6 @@
   </main>
 
   <noscript>このモックを動かすにはJavaScriptを有効にしてください。</noscript>
-  <script type="module" src="./app.js"></script>
+  <script type="module" src="./boot.js?v=20260708-2"></script>
 </body>
 </html>

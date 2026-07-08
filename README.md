@@ -1,17 +1,24 @@
-# Hologram AI Face - Three.js Mock
+# Hologram AI Face - Three.js Mock v1.1
 
-Three.jsで作る、顔型ホログラムAIのWebモックです。
-CSSだけの球体・平面顔ではなく、以下を使っています。
+GitHub Pagesで動かすためのThree.js版ホログラム顔モックです。
 
-- 手続き型の3D顔メッシュ
-- 鼻筋、鼻先、頬、顎の立体形状
-- 半透明ホログラムシェーダー
-- 顔面グリッド
-- 顔面ドット
-- 目、眉、鼻、口の3Dライン
-- 口パク風アニメーション
-- ブラウザ音声読み上げ
-- モック会話JSON
+## v1.1の修正点
+
+- `importmap`依存をやめて、`boot.js`でThree.jsを動的読み込みします。
+- `jsDelivr → unpkg → esm.sh` の順にCDNをフォールバックします。
+- 初期化失敗時に、画面中央へエラーを表示します。
+- `app.js`をキャッシュバスター付きで読み込みます。
+
+## ファイル構成
+
+```text
+index.html
+styles.css
+boot.js
+app.js
+.nojekyll
+README.md
+```
 
 ## ローカル確認
 
@@ -25,65 +32,30 @@ python3 -m http.server 8080
 http://localhost:8080
 ```
 
-`会話モック再生` を押すと、発話・字幕・口パク・表情変更が動きます。
+## GitHub Pages反映
 
-## GitHub Pages
-
-このフォルダの中身をGitHubリポジトリのrootに置きます。
+既存リポジトリ直下に全ファイルを上書きします。
 
 ```bash
 git add .
-git commit -m "add threejs hologram face mock"
+git commit -m "fix threejs boot loader"
 git push
 ```
 
-GitHubで以下を設定します。
+反映後、ブラウザで強制更新してください。
 
-```text
-Settings → Pages → Deploy from a branch → main → /(root)
-```
+- macOS: `Cmd + Shift + R`
+- Windows: `Ctrl + Shift + R`
 
-## 変更ポイント
+## それでも動かない場合
 
-### 会話文
+ブラウザのDevToolsを開いて、ConsoleとNetworkを確認してください。
 
-`app.js` の `mockLines` を編集してください。
+主に見るもの:
 
-```js
-const mockLines = [
-  {
-    display_text: '画面に表示する文',
-    speak_text: '読み上げる文',
-    intent: 'greeting',
-    expression: 'soft_smile',
-    risk_level: 'low'
-  }
-];
-```
+- `boot.js` が 200 で読めているか
+- `app.js?v=20260708-2` が 200 で読めているか
+- `three.module.min.js` が 200 で読めているか
+- WebGL related error が出ていないか
 
-### 顔の形
-
-`app.js` の `widthAt()` と `surfaceAtUV()` が顔の形を作っています。
-
-- `widthAt()`：輪郭、頬、顎、額の幅
-- `surfaceAtUV()`：鼻、頬、唇、顎などの凹凸
-
-### AI API接続
-
-将来的には `playLine()` に渡すJSONをAIバックエンドから取得すれば、同じ表示レイヤーを使えます。
-
-```json
-{
-  "display_text": "126500LNは、現行世代のロレックス コスモグラフ デイトナです。",
-  "speak_text": "いちにーろくごーぜろぜろえるえぬは、現行世代のロレックス コスモグラフ デイトナです。",
-  "intent": "watch_model_explanation",
-  "expression": "neutral",
-  "visual_effect": "normal_hologram",
-  "risk_level": "low",
-  "need_human_check": false
-}
-```
-
-## 注意
-
-このモックは外部CDNからThree.jsを読み込みます。GitHub Pagesではそのまま動きますが、完全オフライン運用をする場合はThree.jsをローカルに同梱してください。
+CDNが会社ネットワークや広告ブロッカーでブロックされている場合、Three.jsをローカル配置する構成に切り替えてください。
