@@ -1,9 +1,9 @@
-# Hologram AI Face - FaceCap Morph Target Mock v5.2
+# Hologram AI Face - FaceCap Morph Target Mock v5.3
 
 three.js の `webgl_morphtargets_face.html` に近い構成へ寄せた版です。
 `facecap.glb` を読み込み、`mesh_2` の `morphTargetDictionary` / `morphTargetInfluences` を使って、口・目・眉を動かします。
 
-## v5.2の主な変更
+## v5.3の主な変更
 
 - LeePerrySmithからFaceCapモデルへ変更
 - 疑似口スリットではなく、`jawOpen` などのmorph targetで口を開閉
@@ -26,11 +26,11 @@ git push
 - Windows: Ctrl + Shift + R
 - Mac: Cmd + Shift + R
 
-Consoleに以下が出ればv5.2です。
+Consoleに以下が出ればv5.3です。
 
 ```text
-[boot] version 20260708-12
-[app] version 20260708-12
+[boot] version 20260708-13
+[app] version 20260708-13
 ```
 
 ## 口パク調整
@@ -62,3 +62,9 @@ const faceMaterial = new THREE.MeshPhysicalMaterial({
   emissiveIntensity: 0.035
 });
 ```
+
+
+## v5.3
+- 肌色の口パッチと太い唇メッシュを削除。
+- 口は黒い穴 + 細い縁取りだけで表現。
+- FaceCap本体の口はほぼ閉じたままにして、歯が出にくい設定に変更。

@@ -1,4 +1,4 @@
-const BOOT_VERSION = '20260708-12';
+const BOOT_VERSION = '20260708-13';
 const bootStatus = document.getElementById('bootStatus');
 const stage = document.getElementById('stage');
 console.info('[boot] version', BOOT_VERSION);
