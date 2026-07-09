@@ -1,5 +1,5 @@
 export async function initHologram(THREE, GLTFLoader, boot = {}) {
-  const APP_VERSION = '20260708-16';
+  const APP_VERSION = '20260708-17';
   console.info('[app] version', APP_VERSION);
 
   const stage = document.getElementById('stage');
@@ -22,6 +22,7 @@ export async function initHologram(THREE, GLTFLoader, boot = {}) {
 
   // FaceCapには眼球・歯・口内などの内部パーツがあるため、基本は頭部メッシュだけ表示します。
   const FACE_ONLY_MODE = true;
+  const ENABLE_MOUTH_OVERLAY = false;
 
   // 口は「大きな肌色パッチ」や「たらこ唇」を使わず、目と同じような黒い穴だけで表現します。
   // 位置がずれる場合は x / y / z / width / closedHeight / openHeight を調整してください。
@@ -398,7 +399,7 @@ export async function initHologram(THREE, GLTFLoader, boot = {}) {
       if (!child.isMesh) return;
 
       // 眼球・歯・舌・口内などの別メッシュは非表示。
-      // 目は穴として見え、口は後述の mouthOverlay で穴＋唇として描画します。
+      // 目は穴として見え、口はモデル側の開口だけを使います。
       if (child !== visibleHeadMesh) {
         child.visible = false;
         return;
@@ -596,8 +597,14 @@ export async function initHologram(THREE, GLTFLoader, boot = {}) {
       faceGroup.add(bustGroup);
     }
 
-    mouthOverlay = createMouthOverlay();
-    faceGroup.add(mouthOverlay);
+    if (ENABLE_MOUTH_OVERLAY) {
+      mouthOverlay = createMouthOverlay();
+      faceGroup.add(mouthOverlay);
+    } else {
+      mouthOverlay = null;
+      mouthHole = null;
+      mouthRim = null;
+    }
 
     morphDict = headMesh.morphTargetDictionary || {};
     morphInfluences = headMesh.morphTargetInfluences || [];
@@ -616,7 +623,7 @@ export async function initHologram(THREE, GLTFLoader, boot = {}) {
       speak_text: line.speak_text,
       intent: line.intent,
       expression: line.expression,
-      visual_effect: 'white_hologram_hollow_mouth',
+      visual_effect: 'white_hologram_clean_opening',
       risk_level: line.risk_level,
       need_human_check: line.risk_level !== 'low'
     };
