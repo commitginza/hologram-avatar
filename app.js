@@ -1,5 +1,5 @@
 export async function initHologram(THREE, GLTFLoader, boot = {}) {
-  const APP_VERSION = '20260708-15';
+  const APP_VERSION = '20260708-16';
   console.info('[app] version', APP_VERSION);
 
   const stage = document.getElementById('stage');
@@ -27,12 +27,14 @@ export async function initHologram(THREE, GLTFLoader, boot = {}) {
   // 位置がずれる場合は x / y / z / width / closedHeight / openHeight を調整してください。
   const MOUTH_HOLE = {
     x: 0.0,
-    y: -0.405,
-    z: 0.84,
-    width: 0.48,
-    closedHeight: 0.020,
-    openHeight: 0.170,
-    rimOpacity: 0.46
+    y: -0.565,
+    z: 0.80,
+    width: 0.34,
+    closedHeight: 0.018,
+    openHeight: 0.110,
+    rimOpacity: 0.34,
+    dropWhileOpen: 0.060,
+    widenWhileOpen: 0.06
   };
 
   // 歯が見えていた頃と同じように、FaceCap本体のjawOpen/mouthOpenを使って口を開きます。
@@ -48,11 +50,11 @@ export async function initHologram(THREE, GLTFLoader, boot = {}) {
   // 歯が見えていた時のような「本来の口が開く動き」に戻すための係数です。
   // 歯・口内メッシュは非表示のまま、jawOpen / mouthOpen だけ強く動かします。
   const MOUTH_MORPH = {
-    jawOpenScale: 0.88,
-    funnelScale: 0.14,
-    puckerScale: 0.06,
-    lowerDownScale: 0.18,
-    upperUpScale: 0.05,
+    jawOpenScale: 0.62,
+    funnelScale: 0.06,
+    puckerScale: 0.02,
+    lowerDownScale: 0.10,
+    upperUpScale: 0.03,
     overlayScale: 1.00
   };
 
@@ -60,14 +62,15 @@ export async function initHologram(THREE, GLTFLoader, boot = {}) {
   // 位置・サイズを変える場合はここを調整してください。
   const BUST_CONFIG = {
     enabled: true,
-    y: -1.24,
-    z: -0.02,
-    height: 1.05,
-    neckWidth: 0.20,
-    shoulderWidth: 1.28,
-    neckDepth: 0.13,
-    shoulderDepth: 0.36,
-    opacity: 0.30
+    y: -0.86,
+    z: -0.03,
+    height: 1.22,
+    neckWidth: 0.24,
+    shoulderWidth: 1.62,
+    neckDepth: 0.16,
+    shoulderDepth: 0.48,
+    opacity: 0.32,
+    neckHeight: 0.42
   };
 
   const mockLines = [
@@ -147,7 +150,7 @@ export async function initHologram(THREE, GLTFLoader, boot = {}) {
   scene.add(root);
 
   const faceGroup = new THREE.Group();
-  faceGroup.position.y = 0.42;
+  faceGroup.position.y = 0.36;
   root.add(faceGroup);
 
   const clock = new THREE.Clock();
@@ -272,7 +275,7 @@ export async function initHologram(THREE, GLTFLoader, boot = {}) {
   scene.add(backgroundParticles);
 
   const baseGroup = new THREE.Group();
-  baseGroup.position.set(0, -2.18, 0);
+  baseGroup.position.set(0, -2.28, 0);
   root.add(baseGroup);
   const baseDisc = new THREE.Mesh(
     new THREE.CylinderGeometry(0.46, 0.46, 0.018, 96, 1, true),
@@ -477,14 +480,20 @@ export async function initHologram(THREE, GLTFLoader, boot = {}) {
     if (!mouthOverlay || !mouthHole || !mouthRim) return;
     const amount = THREE.MathUtils.clamp(open, 0, 1);
     const holeHeight = MOUTH_HOLE.closedHeight + MOUTH_HOLE.openHeight * amount;
-    const width = MOUTH_HOLE.width * (1 + amount * 0.07);
+    const width = MOUTH_HOLE.width * (1 + amount * MOUTH_HOLE.widenWhileOpen);
+
+    mouthOverlay.position.set(
+      MOUTH_HOLE.x,
+      MOUTH_HOLE.y - amount * MOUTH_HOLE.dropWhileOpen,
+      MOUTH_HOLE.z
+    );
 
     mouthHole.scale.set(width, holeHeight, 1);
-    mouthHole.material.opacity = 0.96 + amount * 0.04;
+    mouthHole.material.opacity = 0.94 + amount * 0.04;
 
     mouthRim.geometry.dispose();
     mouthRim.geometry = createEllipseLineGeometry(width * 0.5, holeHeight * 0.5, 128);
-    mouthRim.material.opacity = MOUTH_HOLE.rimOpacity + amount * 0.12;
+    mouthRim.material.opacity = MOUTH_HOLE.rimOpacity + amount * 0.08;
   }
 
   function smooth01(t) {
@@ -492,7 +501,7 @@ export async function initHologram(THREE, GLTFLoader, boot = {}) {
     return v * v * (3 - 2 * v);
   }
 
-  function createBustGeometry(radialSegments = 96, heightSegments = 34) {
+  function createBustGeometry(radialSegments = 112, heightSegments = 42) {
     const positions = [];
     const normals = [];
     const uvs = [];
@@ -500,19 +509,26 @@ export async function initHologram(THREE, GLTFLoader, boot = {}) {
 
     for (let iy = 0; iy <= heightSegments; iy += 1) {
       const t = iy / heightSegments;
-      const shoulder = smooth01((t - 0.18) / 0.72);
-      const lowerTaper = 1.0 - Math.max(0, (t - 0.78) / 0.22) * 0.10;
-      const width = (BUST_CONFIG.neckWidth * (1 - shoulder) + BUST_CONFIG.shoulderWidth * shoulder) * lowerTaper;
-      const depth = BUST_CONFIG.neckDepth * (1 - shoulder) + BUST_CONFIG.shoulderDepth * shoulder;
+      const neckToShoulder = smooth01(t / 0.46);
+      const chestToLower = smooth01((t - 0.34) / 0.66);
+      const width = THREE.MathUtils.lerp(BUST_CONFIG.neckWidth, BUST_CONFIG.shoulderWidth, neckToShoulder) * (1.0 - chestToLower * 0.08);
+      const depth = THREE.MathUtils.lerp(BUST_CONFIG.neckDepth, BUST_CONFIG.shoulderDepth, neckToShoulder) * (1.0 - chestToLower * 0.10);
       const y = -t * BUST_CONFIG.height;
 
       for (let ix = 0; ix <= radialSegments; ix += 1) {
         const a = (ix / radialSegments) * Math.PI * 2;
         const ca = Math.cos(a);
         const sa = Math.sin(a);
-        const frontLift = Math.max(0, sa) * shoulder * 0.035;
-        positions.push(ca * width, y, sa * depth + frontLift);
-        normals.push(ca, 0.15, sa);
+        const front = Math.max(0.0, sa);
+        const back = Math.max(0.0, -sa);
+        const shoulderBulge = Math.exp(-Math.pow((t - 0.58) / 0.18, 2.0));
+        const trapBulge = Math.exp(-Math.pow((t - 0.16) / 0.10, 2.0));
+        const x = ca * width * (1.0 + front * shoulderBulge * 0.05);
+        const z = sa * depth
+          + front * (0.08 * trapBulge + 0.15 * shoulderBulge)
+          - back * 0.03 * shoulderBulge;
+        positions.push(x, y, z);
+        normals.push(ca, 0.18, sa);
         uvs.push(ix / radialSegments, t);
       }
     }
@@ -542,20 +558,20 @@ export async function initHologram(THREE, GLTFLoader, boot = {}) {
     group.name = 'procedural-upper-bust';
     group.position.set(0, BUST_CONFIG.y, BUST_CONFIG.z);
 
+    const neckConnector = new THREE.Mesh(
+      new THREE.CylinderGeometry(BUST_CONFIG.neckWidth * 0.92, BUST_CONFIG.neckWidth * 1.08, BUST_CONFIG.neckHeight, 48, 1, true),
+      bustMaterial.clone()
+    );
+    neckConnector.name = 'neck-connector';
+    neckConnector.position.y = BUST_CONFIG.neckHeight * 0.22;
+    neckConnector.scale.z = 0.90;
+    group.add(neckConnector);
+
     const bust = new THREE.Mesh(createBustGeometry(), bustMaterial.clone());
     bust.name = 'upper-bust-shell';
+    bust.position.y = -BUST_CONFIG.neckHeight * 0.15;
     bust.renderOrder = 0;
     group.add(bust);
-
-    const collar = new THREE.Mesh(
-      new THREE.TorusGeometry(0.34, 0.006, 8, 96),
-      new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.10, depthWrite: false })
-    );
-    collar.name = 'soft-collar-hint';
-    collar.position.set(0, -0.24, 0.17);
-    collar.scale.set(1.25, 0.34, 1);
-    collar.rotation.x = Math.PI / 2;
-    group.add(collar);
 
     return group;
   }
@@ -847,7 +863,7 @@ export async function initHologram(THREE, GLTFLoader, boot = {}) {
 
     const floatY = Math.sin(elapsed * 0.72) * 0.026;
     const yaw = Math.sin(elapsed * 0.22) * 0.028;
-    faceGroup.position.y = 0.42 + floatY;
+    faceGroup.position.y = 0.36 + floatY;
     faceGroup.rotation.y = yaw;
 
     if (modelRoot) {
