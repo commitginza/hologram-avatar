@@ -3,10 +3,9 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Hologram AI Face - Human GLB Mock v4.4.1</title>
+  <title>Hologram AI Face - Human GLB Mock v4.2.1</title>
   <meta name="description" content="Three.jsで作るホログラムAIフェイスのWebモック" />
   <link rel="stylesheet" href="./styles.css" />
-  <link rel="icon" href="data:," />
 </head>
 <body>
   <main class="app-shell">
@@ -23,7 +22,7 @@
 
     <aside class="control-panel">
       <div class="panel-header">
-        <p class="eyebrow">Prototype v4.4.1</p>
+        <p class="eyebrow">Prototype v4.2.1</p>
         <h1>Three.js ホログラム顔</h1>
         <p class="lead">人型GLB顔モデルをホログラムシェーダーで表示します。WebGL不可環境ではCanvas 2Dフォールバックで会話モックを動かします。</p>
       </div>
@@ -40,11 +39,11 @@
 
       <div class="slider-row">
         <label for="depthRange">顔の立体感</label>
-        <input id="depthRange" type="range" min="0.15" max="0.95" value="0.50" step="0.01" />
+        <input id="depthRange" type="range" min="0.25" max="1.00" value="0.62" step="0.01" />
       </div>
       <div class="slider-row">
         <label for="glowRange">発光量</label>
-        <input id="glowRange" type="range" min="0.45" max="1.25" value="0.82" step="0.01" />
+        <input id="glowRange" type="range" min="0.65" max="1.55" value="1" step="0.01" />
       </div>
       <div class="slider-row">
         <label for="noiseRange">揺らぎ</label>
@@ -73,6 +72,6 @@
       }
     }
   </script>
-  <script type="module" src="./boot.js?v=20260708-9"></script>
+  <script type="module" src="./boot.js?v=20260708-7"></script>
 </body>
 </html>
