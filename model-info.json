@@ -1,7 +1,0 @@
-{
-  "file": "https://watchimg.s3.ap-northeast-1.amazonaws.com/glb/humanoid+character+allien+3d+model.glb",
-  "storage": "S3",
-  "bucket": "watchimg",
-  "region": "ap-northeast-1",
-  "note": "This viewer loads the GLB from S3. GitHub does not need to contain the .glb file."
-}
