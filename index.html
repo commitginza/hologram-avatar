@@ -3,75 +3,82 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Hologram AI Face - Human GLB Mock v4.2.1</title>
-  <meta name="description" content="Three.jsで作るホログラムAIフェイスのWebモック" />
+  <title>Webcam Hologram Live Mock</title>
   <link rel="stylesheet" href="./styles.css" />
+  <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
 </head>
 <body>
   <main class="app-shell">
-    <section class="stage-card" aria-label="Hologram stage">
-      <div id="stage" class="stage">
-        <div id="bootStatus" class="boot-status" role="status">Three.jsを読み込み中...</div>
+    <section class="stage-card">
+      <div id="stage" class="stage" aria-label="webcam hologram stage">
+        <div class="status-overlay" id="statusOverlay">
+          <div class="status-title">WEBCAM HOLOGRAM</div>
+          <div class="status-text" id="statusText">カメラを起動してください</div>
+        </div>
       </div>
-      <div class="stage-vignette" aria-hidden="true"></div>
-      <div class="caption-panel" aria-live="polite">
-        <div class="caption-label">HOLOGRAM AI CONCIERGE</div>
-        <p id="captionText">待機中です。右側の「会話モック再生」を押してください。</p>
-      </div>
+      <div class="caption" id="captionText">Webカメラ映像をリアルタイムにホログラム風で表示します。</div>
     </section>
 
-    <aside class="control-panel">
-      <div class="panel-header">
-        <p class="eyebrow">Prototype v4.2.1</p>
-        <h1>Three.js ホログラム顔</h1>
-        <p class="lead">人型GLB顔モデルをホログラムシェーダーで表示します。WebGL不可環境ではCanvas 2Dフォールバックで会話モックを動かします。</p>
+    <aside class="panel">
+      <h1>Webカメラ<br>ホログラム</h1>
+      <p class="note">
+        カメラ映像はブラウザ内だけで処理します。サーバー送信・録画はしていません。
+      </p>
+
+      <div class="button-row">
+        <button id="startBtn" class="primary">カメラ起動</button>
+        <button id="stopBtn">停止</button>
       </div>
 
-      <div class="button-grid">
-        <button id="playBtn" type="button">会話モック再生</button>
-        <button id="oneBtn" type="button">1フレーズ再生</button>
-        <button id="stopBtn" type="button" class="secondary">停止</button>
+      <div class="button-row">
+        <button id="mockBtn">会話モック再生</button>
+        <button id="snapshotBtn">一瞬グリッチ</button>
       </div>
 
-      <label class="input-label" for="customText">任意テキスト</label>
-      <textarea id="customText" rows="4">こんにちは。私は高級腕時計のご相談をサポートするホログラムAIです。ロレックスやパテック フィリップのモデル解説、買取の流れをご案内できます。</textarea>
-      <button id="customBtn" type="button" class="wide">任意テキストで発話</button>
+      <label>
+        透明度
+        <input id="alphaRange" type="range" min="0.10" max="1.00" step="0.01" value="0.76" />
+      </label>
 
-      <div class="slider-row">
-        <label for="depthRange">顔の立体感</label>
-        <input id="depthRange" type="range" min="0.25" max="1.00" value="0.62" step="0.01" />
-      </div>
-      <div class="slider-row">
-        <label for="glowRange">発光量</label>
-        <input id="glowRange" type="range" min="0.65" max="1.55" value="1" step="0.01" />
-      </div>
-      <div class="slider-row">
-        <label for="noiseRange">揺らぎ</label>
-        <input id="noiseRange" type="range" min="0" max="1.8" value="0.7" step="0.01" />
-      </div>
+      <label>
+        白発光
+        <input id="glowRange" type="range" min="0.00" max="2.40" step="0.01" value="1.15" />
+      </label>
 
-      <div class="status-box">
-        <div><span>status</span><strong id="statusText">standby</strong></div>
-        <div><span>intent</span><strong id="intentText">idle</strong></div>
-        <div><span>expression</span><strong id="expressionText">neutral</strong></div>
-      </div>
+      <label>
+        影の濃さ
+        <input id="shadowRange" type="range" min="0.00" max="1.00" step="0.01" value="0.38" />
+      </label>
 
-      <details open>
-        <summary>次にAI APIへつなぐ想定JSON</summary>
-        <pre id="jsonPreview"></pre>
-      </details>
+      <label>
+        スキャンライン
+        <input id="scanRange" type="range" min="0.00" max="1.00" step="0.01" value="0.42" />
+      </label>
+
+      <label>
+        ノイズ
+        <input id="noiseRange" type="range" min="0.00" max="1.00" step="0.01" value="0.26" />
+      </label>
+
+      <label>
+        背景フェード
+        <input id="cutRange" type="range" min="0.00" max="0.90" step="0.01" value="0.16" />
+      </label>
+
+      <label>
+        表示サイズ
+        <input id="scaleRange" type="range" min="0.70" max="1.65" step="0.01" value="1.00" />
+      </label>
+
+      <label class="check-row">
+        <input id="mirrorCheck" type="checkbox" checked />
+        左右反転する
+      </label>
+
+      <pre id="debugBox">status: standby</pre>
     </aside>
   </main>
 
-  <noscript>このモックを動かすにはJavaScriptを有効にしてください。</noscript>
-  <script type="importmap">
-    {
-      "imports": {
-        "three": "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.min.js",
-        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/"
-      }
-    }
-  </script>
-  <script type="module" src="./boot.js?v=20260708-7"></script>
+  <script type="module" src="./app.js?v=webcam-hologram-1"></script>
 </body>
 </html>

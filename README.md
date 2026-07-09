@@ -1,42 +1,42 @@
-# Hologram AI Face v4.2.1
+# Webcam Hologram Live Mock
 
-- v4.2のJavaScript構文エラーを修正。
-- 顔の奥行きを抑え、口パクを強めた版。
+Webカメラ映像をリアルタイムに白基調のホログラム風で表示する静的Webモックです。
 
-# Hologram AI Face - Human GLB Mock v4.2.1
-
-Three.jsで人型GLB顔モデルを読み込み、ホログラム風に表示するWebモックです。
-
-## v4.2.1 修正内容
-
-- GLB全体ではなく、頭部のメインメッシュだけを使用
-- 眼球・歯・口内などのサブメッシュによる多重発光を回避
-- 背景の回転リングを削除
-- 追加の目・口オーバーレイを削除
-- のど元に見えていた疑似口パク用オブジェクトを削除
-- 口パクはシェーダーで本来の口周辺の頂点を変形
-- 顔テクスチャの暗部を強く発光させる処理を弱め、目・口の異常な強調を抑制
-
-## 反映方法
-
-リポジトリ直下に全ファイルを上書きしてpushしてください。
+## ローカル確認
 
 ```bash
-git add .
-git commit -m "fix hologram face mesh selection and mouth movement"
-git push
+python -m http.server 8080
 ```
 
-ブラウザ側では強制更新してください。
+ブラウザで開きます。
 
-- Windows: Ctrl + Shift + R
-- Mac: Cmd + Shift + R
+```text
+http://localhost:8080/
+```
 
-GitHub Pagesのキャッシュが残る場合は、URL末尾に `?v=20260708-7` を付けて確認してください。
+`file://` ではなく、必ず `localhost` で開いてください。
+Webカメラは `localhost` または HTTPS でないと起動できません。
 
+## GitHub Pages
 
-## v4.2.1 修正内容
+リポジトリ直下に以下を置きます。
 
-- app.js内の余分なテンプレートリテラルを削除し、`Unexpected identifier 'attribute'` を修正
-- boot.js / index.html のキャッシュバスターを `20260708-7` に更新
-- 顔の立体感スライダー初期値を 0.62 に設定
+```text
+index.html
+styles.css
+app.js
+favicon.svg
+README.md
+.nojekyll
+```
+
+その後、GitHub Pages の公開元を `main / root` にしてください。
+
+## 調整箇所
+
+`app.js` の `fragmentShader` 内で、白基調・影・スキャンライン・背景フェードを制御しています。
+UIのスライダーからも調整できます。
+
+## 注意
+
+このモックはブラウザ内だけでカメラ映像を加工します。録画やサーバー送信はしていません。

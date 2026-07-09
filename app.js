@@ -1,651 +1,355 @@
-export async function initHologram(THREE, GLTFLoader, boot = {}) {
-  const stage = document.getElementById('stage');
-  const captionText = document.getElementById('captionText');
-  const statusText = document.getElementById('statusText');
-  const intentText = document.getElementById('intentText');
-  const expressionText = document.getElementById('expressionText');
-  const jsonPreview = document.getElementById('jsonPreview');
-  const playBtn = document.getElementById('playBtn');
-  const oneBtn = document.getElementById('oneBtn');
-  const stopBtn = document.getElementById('stopBtn');
-  const customBtn = document.getElementById('customBtn');
-  const customText = document.getElementById('customText');
-  const depthRange = document.getElementById('depthRange');
-  const glowRange = document.getElementById('glowRange');
-  const noiseRange = document.getElementById('noiseRange');
+import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js';
 
-  const ASSET_BASE = 'https://cdn.jsdelivr.net/gh/mrdoob/three.js@r180/examples/models/gltf/LeePerrySmith/';
-  const MODEL_URL = `${ASSET_BASE}LeePerrySmith.glb`;
+const VERSION = 'webcam-hologram-1';
+console.info('[webcam-hologram]', VERSION);
 
-  const mockLines = [
-    {
-      display_text: 'こんにちは。私は高級腕時計のご相談をサポートするホログラムAIです。',
-      speak_text: 'こんにちは。私は高級腕時計のご相談をサポートするホログラムAIです。',
-      intent: 'greeting',
-      expression: 'soft_smile',
-      risk_level: 'low'
-    },
-    {
-      display_text: 'ロレックス、パテック フィリップ、オーデマ ピゲなど、ブランドや型番の特徴をご案内できます。',
-      speak_text: 'ロレックス、パテック フィリップ、オーデマ ピゲなど、ブランドや型番の特徴をご案内できます。',
-      intent: 'watch_guidance',
-      expression: 'neutral',
-      risk_level: 'low'
-    },
-    {
-      display_text: '型番や専門用語は辞書に登録しておくことで、音声認識やAI回答の精度を上げられます。',
-      speak_text: '型番や専門用語は辞書に登録しておくことで、音声認識やAI回答の精度を上げられます。',
-      intent: 'dictionary_demo',
-      expression: 'thinking',
-      risk_level: 'low'
-    },
-    {
-      display_text: '在庫や買取価格は状態、付属品、市況によって変わります。最終確認はスタッフへ引き継ぎます。',
-      speak_text: '在庫や買取価格は状態、付属品、市況によって変わります。最終確認はスタッフへ引き継ぎます。',
-      intent: 'safe_handoff',
-      expression: 'serious',
-      risk_level: 'medium'
+const stage = document.getElementById('stage');
+const statusText = document.getElementById('statusText');
+const captionText = document.getElementById('captionText');
+const debugBox = document.getElementById('debugBox');
+
+const startBtn = document.getElementById('startBtn');
+const stopBtn = document.getElementById('stopBtn');
+const mockBtn = document.getElementById('mockBtn');
+const snapshotBtn = document.getElementById('snapshotBtn');
+
+const alphaRange = document.getElementById('alphaRange');
+const glowRange = document.getElementById('glowRange');
+const shadowRange = document.getElementById('shadowRange');
+const scanRange = document.getElementById('scanRange');
+const noiseRange = document.getElementById('noiseRange');
+const cutRange = document.getElementById('cutRange');
+const scaleRange = document.getElementById('scaleRange');
+const mirrorCheck = document.getElementById('mirrorCheck');
+
+const state = {
+  stream: null,
+  videoReady: false,
+  talking: false,
+  talkPulse: 0,
+  glitch: 0,
+  status: 'standby'
+};
+
+const video = document.createElement('video');
+video.autoplay = true;
+video.muted = true;
+video.playsInline = true;
+video.setAttribute('playsinline', '');
+video.style.display = 'none';
+document.body.appendChild(video);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(stage.clientWidth, stage.clientHeight);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+stage.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.fog = new THREE.FogExp2(0x05070c, 0.05);
+
+const camera = new THREE.PerspectiveCamera(38, stage.clientWidth / stage.clientHeight, 0.1, 100);
+camera.position.set(0, 0.18, 5.2);
+
+const root = new THREE.Group();
+scene.add(root);
+
+const videoTexture = new THREE.VideoTexture(video);
+videoTexture.colorSpace = THREE.SRGBColorSpace;
+videoTexture.minFilter = THREE.LinearFilter;
+videoTexture.magFilter = THREE.LinearFilter;
+videoTexture.generateMipmaps = false;
+
+const uniforms = {
+  uVideo: { value: videoTexture },
+  uTime: { value: 0 },
+  uAlpha: { value: Number(alphaRange.value) },
+  uGlow: { value: Number(glowRange.value) },
+  uShadow: { value: Number(shadowRange.value) },
+  uScan: { value: Number(scanRange.value) },
+  uNoise: { value: Number(noiseRange.value) },
+  uCut: { value: Number(cutRange.value) },
+  uTalk: { value: 0 },
+  uGlitch: { value: 0 },
+  uMirror: { value: mirrorCheck.checked ? 1 : 0 }
+};
+
+const hologramMaterial = new THREE.ShaderMaterial({
+  transparent: true,
+  depthWrite: false,
+  depthTest: true,
+  side: THREE.DoubleSide,
+  uniforms,
+  vertexShader: `
+    varying vec2 vUv;
+    void main() {
+      vUv = uv;
+      vec3 p = position;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
     }
-  ];
+  `,
+  fragmentShader: `
+    uniform sampler2D uVideo;
+    uniform float uTime;
+    uniform float uAlpha;
+    uniform float uGlow;
+    uniform float uShadow;
+    uniform float uScan;
+    uniform float uNoise;
+    uniform float uCut;
+    uniform float uTalk;
+    uniform float uGlitch;
+    uniform int uMirror;
+    varying vec2 vUv;
 
-  const state = {
-    active: false,
-    sequenceRunning: false,
-    lineIndex: 0,
-    mouth: 0,
-    targetMouth: 0,
-    talkIntensity: 0,
-    expression: 'neutral',
-    intent: 'idle',
-    currentText: '',
-    captionTimer: 0,
-    captionCursor: 0,
-    depthScale: Number(depthRange?.value || 0.62),
-    glowScale: Number(glowRange?.value || 1),
-    noiseScale: Number(noiseRange?.value || 0.7)
-  };
+    float rand(vec2 co) {
+      return fract(sin(dot(co.xy, vec2(12.9898, 78.233))) * 43758.5453);
+    }
 
-  const renderer = new THREE.WebGLRenderer({
-    antialias: true,
-    alpha: true,
-    powerPreference: 'default',
-    failIfMajorPerformanceCaveat: false
-  });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-  renderer.setSize(stage.clientWidth, stage.clientHeight);
-  renderer.outputColorSpace = THREE.SRGBColorSpace;
-  stage.appendChild(renderer.domElement);
+    vec3 sampleVideo(vec2 uv) {
+      if (uMirror == 1) uv.x = 1.0 - uv.x;
+      float lineShift = sin((uv.y * 75.0) + uTime * 5.0) * 0.0025 * uGlitch;
+      uv.x += lineShift;
+      return texture2D(uVideo, uv).rgb;
+    }
 
-  const scene = new THREE.Scene();
-  scene.fog = new THREE.FogExp2(0x020812, 0.075);
+    void main() {
+      vec2 uv = vUv;
+      vec3 src = sampleVideo(uv);
+      float lum = dot(src, vec3(0.299, 0.587, 0.114));
 
-  const camera = new THREE.PerspectiveCamera(34, stage.clientWidth / stage.clientHeight, 0.1, 100);
-  camera.position.set(0, 0.18, 5.6);
+      // 簡易エッジ検出。輪郭だけ少し白く出してホログラムらしくする。
+      vec2 px = vec2(1.0 / 900.0, 1.0 / 600.0);
+      float l1 = dot(sampleVideo(uv + vec2(px.x, 0.0)), vec3(0.299, 0.587, 0.114));
+      float l2 = dot(sampleVideo(uv - vec2(px.x, 0.0)), vec3(0.299, 0.587, 0.114));
+      float l3 = dot(sampleVideo(uv + vec2(0.0, px.y)), vec3(0.299, 0.587, 0.114));
+      float l4 = dot(sampleVideo(uv - vec2(0.0, px.y)), vec3(0.299, 0.587, 0.114));
+      float edge = clamp(abs(l1 - l2) + abs(l3 - l4), 0.0, 1.0);
+      edge = smoothstep(0.06, 0.26, edge);
 
-  const root = new THREE.Group();
-  root.position.y = -0.08;
-  scene.add(root);
+      // 背景フェード。値を上げると暗い背景が消えやすい。
+      // 完全な人物切り抜きではないため、背景が暗いほど綺麗に抜けます。
+      float bgMask = smoothstep(uCut, uCut + 0.22, lum + edge * 0.28);
 
-  const faceGroup = new THREE.Group();
-  faceGroup.position.y = 0.32;
-  root.add(faceGroup);
+      float scan = sin((uv.y * 920.0) - uTime * 9.0);
+      float scanLine = 0.72 + smoothstep(0.42, 1.0, scan) * 0.28 * uScan;
 
-  const clock = new THREE.Clock();
+      float noise = rand(uv * vec2(720.0, 420.0) + uTime * 0.55) * uNoise;
+      float vignette = smoothstep(0.88, 0.24, distance(uv, vec2(0.5, 0.52)));
 
-  function loadGltf(url) {
-    return new Promise((resolve, reject) => {
-      const loader = new GLTFLoader();
-      loader.setCrossOrigin('anonymous');
-      loader.load(url, resolve, undefined, reject);
-    });
+      // 白基調：映像の色はほぼ捨て、輝度と影だけで立体感を出す。
+      vec3 whiteBase = vec3(0.96, 0.975, 1.0);
+      vec3 shadow = vec3(0.06, 0.07, 0.085);
+      vec3 tone = mix(shadow, whiteBase, smoothstep(0.10, 0.95, lum));
+      tone += edge * vec3(0.80, 0.86, 0.95);
+      tone += vec3(noise * 0.08);
+      tone *= scanLine;
+      tone += vec3(uTalk * 0.08 + uGlitch * 0.12) * uGlow;
+
+      float alpha = uAlpha * bgMask * vignette;
+      alpha *= 0.46 + lum * 0.50 + edge * 0.55;
+      alpha *= 1.0 + uTalk * 0.12;
+      alpha = clamp(alpha, 0.0, 0.92);
+
+      // 影の濃さ。値を上げると暗部が残り、立体感が増える。
+      tone = mix(tone, vec3(lum), 0.06);
+      tone = mix(tone, tone * (0.72 + lum * 0.42), uShadow);
+
+      gl_FragColor = vec4(tone * uGlow, alpha);
+    }
+  `
+});
+
+const screen = new THREE.Mesh(new THREE.PlaneGeometry(3.20, 2.40, 1, 1), hologramMaterial);
+screen.position.set(0, 0.16, 0);
+root.add(screen);
+
+const rimMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.16, depthWrite: false });
+const baseDisc = new THREE.Mesh(new THREE.CylinderGeometry(0.62, 0.62, 0.018, 128, 1, true), rimMaterial.clone());
+baseDisc.position.set(0, -1.50, 0.02);
+root.add(baseDisc);
+
+const baseCone = new THREE.Mesh(
+  new THREE.ConeGeometry(0.46, 1.15, 96, 1, true),
+  new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.055, depthWrite: false, side: THREE.DoubleSide })
+);
+baseCone.position.set(0, -0.95, 0.02);
+root.add(baseCone);
+
+function makeParticles(count = 170) {
+  const positions = [];
+  const sizes = [];
+  for (let i = 0; i < count; i += 1) {
+    positions.push((Math.random() - 0.5) * 7.5, (Math.random() - 0.5) * 5.0, -1.5 - Math.random() * 4.5);
+    sizes.push(0.4 + Math.random() * 0.8);
   }
-
-  const materialUniforms = {
-    uTime: { value: 0 },
-    uTalk: { value: 0 },
-    uMouthOpen: { value: 0 },
-    uGlow: { value: 1 },
-    uNoise: { value: 0.7 }
-  };
-
-  const hologramMaterial = new THREE.ShaderMaterial({
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setAttribute('aSize', new THREE.Float32BufferAttribute(sizes, 1));
+  const material = new THREE.ShaderMaterial({
     transparent: true,
     depthWrite: false,
-    depthTest: true,
-    blending: THREE.AdditiveBlending,
-    side: THREE.FrontSide,
-    uniforms: materialUniforms,
+    uniforms: { uTime: { value: 0 } },
     vertexShader: `
+      attribute float aSize;
       uniform float uTime;
-      uniform float uTalk;
-      uniform float uMouthOpen;
-      uniform float uNoise;
-      varying vec3 vNormalV;
-      varying vec3 vViewPos;
-      varying vec2 vUv;
-      varying float vWorldY;
-      varying float vMouthMask;
-      varying float vFeatureMask;
-
-      float hash(vec3 p) {
-        p = fract(p * 0.3183099 + vec3(0.11, 0.27, 0.39));
-        p *= 17.0;
-        return fract(p.x * p.y * p.z * (p.x + p.y + p.z));
-      }
-
-      float ellipseMask(vec2 uv, vec2 center, vec2 radius) {
-        vec2 d = (uv - center) / radius;
-        return exp(-dot(d, d));
-      }
-
+      varying float vFade;
       void main() {
-        vUv = uv;
-        vec3 displaced = position;
-        float scanWave = sin((position.y * 16.0) + (uTime * 3.4)) * 0.004;
-        float microNoise = (hash(position + uTime * 0.035) - 0.5) * 0.012 * uNoise;
-        displaced += normal * (scanWave + microNoise + uTalk * 0.004);
-
-        float mouthMask = ellipseMask(vUv, vec2(0.50, 0.33), vec2(0.16, 0.06));
-        float jawMask = ellipseMask(vUv, vec2(0.50, 0.25), vec2(0.25, 0.14));
-        float noseMask = ellipseMask(vUv, vec2(0.50, 0.47), vec2(0.10, 0.16));
-        float eyeL = ellipseMask(vUv, vec2(0.34, 0.60), vec2(0.11, 0.08));
-        float eyeR = ellipseMask(vUv, vec2(0.66, 0.60), vec2(0.11, 0.08));
-        float earL = ellipseMask(vUv, vec2(0.07, 0.53), vec2(0.07, 0.18));
-        float earR = ellipseMask(vUv, vec2(0.93, 0.53), vec2(0.07, 0.18));
-        float featureMask = max(max(noseMask, mouthMask), max(max(eyeL, eyeR), max(earL, earR)));
-        float flatten = mix(1.0, 0.14, clamp(featureMask, 0.0, 1.0));
-        displaced.z *= flatten;
-
-        float open = clamp(uMouthOpen * 1.35, 0.0, 1.0);
-        displaced.y -= jawMask * open * 0.085;
-        displaced.z += mouthMask * open * 0.040;
-        displaced.x += sign(position.x) * mouthMask * open * 0.010;
-        vMouthMask = mouthMask;
-        vFeatureMask = featureMask;
-
-        vec4 worldPosition = modelMatrix * vec4(displaced, 1.0);
-        vec4 mvPosition = modelViewMatrix * vec4(displaced, 1.0);
-        vWorldY = worldPosition.y;
-        vViewPos = -mvPosition.xyz;
-        vNormalV = normalize(normalMatrix * normal);
+        vec3 p = position;
+        p.y += sin(uTime * 0.25 + position.x * 1.4) * 0.025;
+        vec4 mvPosition = modelViewMatrix * vec4(p, 1.0);
+        gl_PointSize = aSize * (20.0 / -mvPosition.z);
         gl_Position = projectionMatrix * mvPosition;
+        vFade = 0.32 + 0.22 * sin(uTime + position.x * 3.0 + position.y * 2.0);
       }
     `,
     fragmentShader: `
-      uniform float uTime;
-      uniform float uTalk;
-      uniform float uMouthOpen;
-      uniform float uGlow;
-      varying vec3 vNormalV;
-      varying vec3 vViewPos;
-      varying vec2 vUv;
-      varying float vWorldY;
-      varying float vMouthMask;
-      varying float vFeatureMask;
-
-      float lineMask(vec2 uv, vec2 center, vec2 radius) {
-        vec2 d = (uv - center) / radius;
-        float dist2 = dot(d, d);
-        return exp(-dist2);
-      }
-
+      varying float vFade;
       void main() {
-        vec3 N = normalize(vNormalV);
-        vec3 V = normalize(vViewPos);
-        float fresnel = pow(1.0 - abs(dot(N, V)), 2.15);
-        float scanRaw = sin((vWorldY * 82.0) - (uTime * 10.0));
-        float scan = smoothstep(0.78, 1.0, scanRaw);
-        float slowBand = smoothstep(0.02, 0.18, abs(fract(vWorldY * 1.2 - uTime * 0.12) - 0.5));
-
-        float mouthOpen = clamp(uMouthOpen * 1.35, 0.0, 1.0);
-        float mouthUpper = lineMask(vUv, vec2(0.50, 0.355), vec2(0.14, 0.010));
-        float mouthLower = lineMask(vUv, vec2(0.50, 0.318 - mouthOpen * 0.030), vec2(0.13, 0.012 + mouthOpen * 0.018));
-        float eyeLeft = lineMask(vUv, vec2(0.34, 0.60), vec2(0.07, 0.012));
-        float eyeRight = lineMask(vUv, vec2(0.66, 0.60), vec2(0.07, 0.012));
-        float browLeft = lineMask(vUv, vec2(0.34, 0.67), vec2(0.09, 0.010));
-        float browRight = lineMask(vUv, vec2(0.66, 0.67), vec2(0.09, 0.010));
-        float noseLine = lineMask(vUv, vec2(0.50, 0.49), vec2(0.022, 0.080)) * 0.55;
-        float faceGuide = max(max(eyeLeft, eyeRight), max(max(browLeft, browRight), max(mouthUpper, mouthLower)));
-        faceGuide = max(faceGuide, noseLine);
-
-        float alpha = 0.050 + fresnel * 0.30 + scan * 0.035 + uTalk * 0.050;
-        alpha += faceGuide * 0.11;
-        alpha *= 0.84 + slowBand * 0.16;
-        alpha = clamp(alpha, 0.035, 0.68);
-
-        vec3 base = vec3(0.42, 0.92, 1.0);
-        vec3 color = base * (0.62 + fresnel * 2.1 + scan * 0.28 + uTalk * 0.18 + faceGuide * 0.80) * uGlow;
-        gl_FragColor = vec4(color, alpha);
+        vec2 d = gl_PointCoord - vec2(0.5);
+        float a = smoothstep(0.5, 0.0, length(d)) * vFade;
+        gl_FragColor = vec4(0.90, 0.94, 1.0, a * 0.58);
       }
     `
   });
-
-  const wireMaterial = new THREE.LineBasicMaterial({
-    color: 0x91f6ff,
-    transparent: true,
-    opacity: 0.095,
-    blending: THREE.AdditiveBlending,
-    depthWrite: false
-  });
-
-  const pointsMaterial = new THREE.PointsMaterial({
-    color: 0xb5fbff,
-    size: 0.009,
-    transparent: true,
-    opacity: 0.135,
-    blending: THREE.AdditiveBlending,
-    depthWrite: false
-  });
-
-  const faceModelRoot = new THREE.Group();
-  faceGroup.add(faceModelRoot);
-
-  let modelContent = null;
-  const modelBaseScale = new THREE.Vector3(1, 1, 1);
-  let expressionTiltGroup = new THREE.Group();
-
-  function fitModelToStage(object) {
-    const box = new THREE.Box3().setFromObject(object);
-    const size = box.getSize(new THREE.Vector3());
-    const center = box.getCenter(new THREE.Vector3());
-    const targetHeight = 3.20;
-    const scale = targetHeight / Math.max(size.y, 0.0001);
-    object.scale.setScalar(scale);
-    object.position.set(-center.x * scale, -center.y * scale + 0.02, -center.z * scale);
-  }
-
-  function decorateMesh(mesh) {
-    mesh.material = hologramMaterial;
-    mesh.renderOrder = 1;
-
-    const wire = new THREE.LineSegments(new THREE.WireframeGeometry(mesh.geometry), wireMaterial);
-    wire.renderOrder = 2;
-    wire.scale.setScalar(1.0015);
-    mesh.add(wire);
-
-    const points = new THREE.Points(mesh.geometry, pointsMaterial);
-    points.renderOrder = 3;
-    points.scale.setScalar(1.003);
-    mesh.add(points);
-  }
-
-  function collectMeshes(object) {
-    const meshes = [];
-    object.traverse((child) => {
-      if (child.isMesh && child.geometry) meshes.push(child);
-    });
-    return meshes;
-  }
-
-  function selectPrimaryHeadMesh(object) {
-    const meshes = collectMeshes(object);
-    if (!meshes.length) throw new Error('GLB内に表示可能なMeshが見つかりません。');
-
-    // 眼球・歯・口内などの小さいサブメッシュまでホログラム化すると、
-    // 目や口が多重に発光して見える。最大バウンディングボックスのメッシュだけを頭部として使う。
-    let best = meshes[0];
-    let bestScore = -Infinity;
-    for (const mesh of meshes) {
-      mesh.geometry.computeBoundingBox();
-      const box = mesh.geometry.boundingBox;
-      const size = box.getSize(new THREE.Vector3());
-      const volume = size.x * size.y * size.z;
-      const vertexCount = mesh.geometry.attributes.position?.count || 0;
-      const score = volume * 1000 + vertexCount;
-      if (score > bestScore) {
-        best = mesh;
-        bestScore = score;
-      }
-    }
-
-    console.info('[hologram] selected primary mesh:', best.name || '(unnamed)', 'from', meshes.length, 'meshes');
-
-    const group = new THREE.Group();
-    const mesh = best.clone(false);
-    mesh.geometry = best.geometry.clone();
-    mesh.geometry.computeVertexNormals();
-    decorateMesh(mesh);
-    group.add(mesh);
-    return group;
-  }
-
-  async function loadHumanHead() {
-    boot.onStatus?.('人型GLB顔モデルを取得中...');
-    const gltf = await loadGltf(MODEL_URL);
-
-    // v4: GLB全体ではなく、頭部のメインメッシュだけを使用。
-    // これにより眼球・歯・口内・不要なサブメッシュの多重発光を避ける。
-    modelContent = selectPrimaryHeadMesh(gltf.scene);
-    fitModelToStage(modelContent);
-    modelBaseScale.copy(modelContent.scale);
-    faceModelRoot.add(modelContent);
-
-    expressionTiltGroup = new THREE.Group();
-    expressionTiltGroup.position.set(0, 0, 0);
-    faceGroup.add(expressionTiltGroup);
-  }
-
-  const baseGroup = new THREE.Group();
-  baseGroup.position.set(0, -1.72, 0);
-  root.add(baseGroup);
-  const baseDisc = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.44, 0.44, 0.022, 96, 1, true),
-    new THREE.MeshBasicMaterial({ color: 0x9af7ff, transparent: true, opacity: 0.16, blending: THREE.AdditiveBlending, depthWrite: false })
-  );
-  const baseCone = new THREE.Mesh(
-    new THREE.ConeGeometry(0.32, 0.74, 64, 1, true),
-    new THREE.MeshBasicMaterial({ color: 0x65e7ff, transparent: true, opacity: 0.08, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide })
-  );
-  baseCone.position.y = 0.36;
-  baseGroup.add(baseDisc, baseCone);
-
-  function createBackgroundParticles(count = 240) {
-    const positions = [];
-    const sizes = [];
-    for (let i = 0; i < count; i += 1) {
-      positions.push(
-        (Math.random() - 0.5) * 9.5,
-        (Math.random() - 0.5) * 6.5,
-        -1.8 - Math.random() * 5.5
-      );
-      sizes.push(0.5 + Math.random() * 1.0);
-    }
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-    geometry.setAttribute('aSize', new THREE.Float32BufferAttribute(sizes, 1));
-    const material = new THREE.ShaderMaterial({
-      transparent: true,
-      depthWrite: false,
-      blending: THREE.AdditiveBlending,
-      uniforms: {
-        uTime: { value: 0 }
-      },
-      vertexShader: `
-        attribute float aSize;
-        uniform float uTime;
-        varying float vFade;
-        void main() {
-          vec3 p = position;
-          p.y += sin(uTime * 0.25 + position.x * 1.2) * 0.025;
-          vec4 mvPosition = modelViewMatrix * vec4(p, 1.0);
-          gl_PointSize = aSize * (18.0 / -mvPosition.z);
-          gl_Position = projectionMatrix * mvPosition;
-          vFade = 0.45 + 0.35 * sin(uTime + position.x * 4.0 + position.y * 3.0);
-        }
-      `,
-      fragmentShader: `
-        varying float vFade;
-        void main() {
-          vec2 uv = gl_PointCoord - vec2(0.5);
-          float d = length(uv);
-          float alpha = smoothstep(0.5, 0.0, d) * vFade;
-          gl_FragColor = vec4(0.55, 0.95, 1.0, alpha);
-        }
-      `
-    });
-    const points = new THREE.Points(geometry, material);
-    points.userData.material = material;
-    return points;
-  }
-
-  const backgroundParticles = createBackgroundParticles();
-  scene.add(backgroundParticles);
-
-  const pointLight = new THREE.PointLight(0x8ff6ff, 2.8, 8.0);
-  pointLight.position.set(0, 0.3, 2.5);
-  scene.add(pointLight);
-  const rearLight = new THREE.PointLight(0x2dbdff, 1.0, 7.0);
-  rearLight.position.set(0, 0.0, -1.8);
-  scene.add(rearLight);
-
-  function updatePreview(line) {
-    const payload = {
-      display_text: line.display_text,
-      speak_text: line.speak_text,
-      intent: line.intent,
-      expression: line.expression,
-      visual_effect: line.risk_level === 'medium' ? 'soft_warning_hologram' : 'normal_hologram',
-      risk_level: line.risk_level,
-      need_human_check: line.risk_level !== 'low'
-    };
-    jsonPreview.textContent = JSON.stringify(payload, null, 2);
-  }
-
-  function setStatus(status, intent = state.intent) {
-    state.intent = intent;
-    statusText.textContent = status;
-    intentText.textContent = intent;
-  }
-
-  function setExpression(expression) {
-    state.expression = expression;
-    expressionText.textContent = expression;
-
-    const serious = expression === 'serious';
-    const thinking = expression === 'thinking';
-    const smile = expression === 'soft_smile';
-
-    if (expressionTiltGroup) {
-      expressionTiltGroup.rotation.z = THREE.MathUtils.degToRad(thinking ? -1.3 : serious ? 0.8 : 0);
-      expressionTiltGroup.position.y = smile ? 0.010 : serious ? -0.008 : 0;
-    }
-  }
-
-  function kanaToMouthSeed(char) {
-    if ('あかさたなはまやらわがざだばぱぁゃゎアカサタナハマヤラワガザダバパァャヮAＯa'.includes(char)) return 0.95;
-    if ('いきしちにひみりぎじぢびぴぃイキシチニヒミリギジヂビピィIい'.includes(char)) return 0.38;
-    if ('うくすつぬふむゆるぐずづぶぷぅゅウクスツヌフムユルグズヅブプゥュU'.includes(char)) return 0.60;
-    if ('えけせてねへめれげぜでべぺぇエケセテネヘメレゲゼデベペェE'.includes(char)) return 0.52;
-    if ('おこそとのほもよろをごぞどぼぽぉょオコソトノホモヨロヲゴゾドボポォョO'.includes(char)) return 0.76;
-    if ('。、，,.！？!? 　\n'.includes(char)) return 0.03;
-    return 0.28 + Math.random() * 0.50;
-  }
-
-  function startCaption(text) {
-    state.currentText = text;
-    state.captionCursor = 0;
-    state.captionTimer = 0;
-    captionText.textContent = '';
-  }
-
-  function updateCaption(delta) {
-    if (!state.currentText) return;
-    state.captionTimer += delta;
-    const interval = 0.024;
-    while (state.captionTimer >= interval && state.captionCursor < state.currentText.length) {
-      state.captionTimer -= interval;
-      state.captionCursor += 1;
-      captionText.textContent = state.currentText.slice(0, state.captionCursor);
-    }
-  }
-
-  function startMockMouthFromText(text, estimatedSeconds) {
-    let i = 0;
-    const chars = [...text];
-    const duration = Math.max(estimatedSeconds, chars.length * 0.045);
-    const interval = Math.max(35, Math.floor((duration * 1000) / Math.max(chars.length, 1)));
-    clearInterval(state.mouthInterval);
-    state.mouthInterval = setInterval(() => {
-      if (!state.active) {
-        clearInterval(state.mouthInterval);
-        return;
-      }
-      const char = chars[i % chars.length] || ' ';
-      const seed = kanaToMouthSeed(char);
-      state.targetMouth = seed * (0.75 + Math.random() * 0.32);
-      i += 1;
-    }, interval);
-  }
-
-  function stopSpeech() {
-    if ('speechSynthesis' in window) {
-      window.speechSynthesis.cancel();
-    }
-  }
-
-  function speakWithBrowser(text, callbacks = {}) {
-    if (!('speechSynthesis' in window) || !('SpeechSynthesisUtterance' in window)) {
-      const fallbackSeconds = Math.max(2.2, text.length * 0.075);
-      window.setTimeout(() => callbacks.onend?.(), fallbackSeconds * 1000);
-      return fallbackSeconds;
-    }
-
-    stopSpeech();
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = 'ja-JP';
-    utterance.rate = 0.92;
-    utterance.pitch = 0.78;
-    utterance.volume = 1;
-    utterance.onend = () => callbacks.onend?.();
-    utterance.onerror = () => callbacks.onerror?.();
-    window.speechSynthesis.speak(utterance);
-    return Math.max(2.2, text.length * 0.08);
-  }
-
-  async function playLine(line) {
-    state.active = true;
-    setStatus('speaking', line.intent);
-    setExpression(line.expression);
-    updatePreview(line);
-    startCaption(line.display_text);
-    state.targetMouth = 0.55;
-    const estimated = speakWithBrowser(line.speak_text, {
-      onend: () => finishLine(),
-      onerror: () => finishLine()
-    });
-    startMockMouthFromText(line.speak_text, estimated);
-  }
-
-  function finishLine() {
-    clearInterval(state.mouthInterval);
-    state.active = false;
-    state.targetMouth = 0;
-    setStatus('standby', state.intent);
-  }
-
-  async function playSequence() {
-    if (state.sequenceRunning) return;
-    state.sequenceRunning = true;
-    state.lineIndex = 0;
-    for (const line of mockLines) {
-      if (!state.sequenceRunning) break;
-      await new Promise((resolve) => {
-        playLine(line);
-        const check = setInterval(() => {
-          if (!state.active || !state.sequenceRunning) {
-            clearInterval(check);
-            window.setTimeout(resolve, 420);
-          }
-        }, 120);
-      });
-    }
-    state.sequenceRunning = false;
-    setStatus('standby', 'idle');
-  }
-
-  function playOne() {
-    state.sequenceRunning = false;
-    const line = mockLines[state.lineIndex % mockLines.length];
-    state.lineIndex += 1;
-    playLine(line);
-  }
-
-  function playCustom() {
-    const text = customText.value.trim();
-    if (!text) return;
-    const line = {
-      display_text: text,
-      speak_text: text,
-      intent: 'custom_demo',
-      expression: 'neutral',
-      risk_level: 'low'
-    };
-    state.sequenceRunning = false;
-    playLine(line);
-  }
-
-  function stopAll() {
-    state.sequenceRunning = false;
-    state.active = false;
-    state.targetMouth = 0;
-    clearInterval(state.mouthInterval);
-    stopSpeech();
-    setStatus('standby', 'idle');
-    captionText.textContent = '停止しました。';
-  }
-
-  function updateMouth(delta) {
-    state.mouth += (state.targetMouth - state.mouth) * Math.min(1, delta * 12);
-    state.talkIntensity += ((state.active ? 1 : 0) - state.talkIntensity) * Math.min(1, delta * 5);
-
-    const open = Math.min(1, state.mouth * state.talkIntensity * 1.55);
-    materialUniforms.uTalk.value = open;
-    materialUniforms.uMouthOpen.value = open;
-  }
-
-  function resize() {
-    const width = stage.clientWidth;
-    const height = stage.clientHeight;
-    camera.aspect = width / height;
-    camera.updateProjectionMatrix();
-    renderer.setSize(width, height);
-  }
-
-  function animate() {
-    const delta = clock.getDelta();
-    const elapsed = clock.elapsedTime;
-
-    updateCaption(delta);
-    updateMouth(delta);
-
-    materialUniforms.uTime.value = elapsed;
-    materialUniforms.uGlow.value = state.glowScale;
-    materialUniforms.uNoise.value = state.noiseScale;
-
-    backgroundParticles.userData.material.uniforms.uTime.value = elapsed;
-
-    const floatY = Math.sin(elapsed * 0.72) * 0.040;
-    const yaw = Math.sin(elapsed * 0.28) * 0.040;
-    const roll = Math.sin(elapsed * 0.20) * 0.006;
-    faceGroup.position.y = 0.32 + floatY;
-    faceGroup.rotation.y = yaw;
-    faceGroup.rotation.z = roll;
-
-    if (modelContent) {
-      modelContent.scale.z = modelBaseScale.z * state.depthScale;
-    }
-    pointLight.intensity = (2.45 + state.talkIntensity * 1.3 + Math.sin(elapsed * 2.8) * 0.18) * state.glowScale;
-    baseDisc.scale.setScalar(1 + Math.sin(elapsed * 1.7) * 0.055 + state.talkIntensity * 0.08);
-    baseCone.material.opacity = 0.055 + state.talkIntensity * 0.055;
-
-    renderer.render(scene, camera);
-    requestAnimationFrame(animate);
-  }
-
-  function initEvents() {
-    playBtn.addEventListener('click', playSequence);
-    oneBtn.addEventListener('click', playOne);
-    stopBtn.addEventListener('click', stopAll);
-    customBtn.addEventListener('click', playCustom);
-    depthRange.addEventListener('input', () => {
-      state.depthScale = Number(depthRange.value);
-    });
-    glowRange.addEventListener('input', () => {
-      state.glowScale = Number(glowRange.value);
-    });
-    noiseRange.addEventListener('input', () => {
-      state.noiseScale = Number(noiseRange.value);
-    });
-    window.addEventListener('resize', resize);
-  }
-
-  initEvents();
-  updatePreview(mockLines[0]);
-  setExpression('neutral');
-  resize();
-  animate();
-
-  await loadHumanHead();
-  setExpression('neutral');
-  boot.hideStatus?.();
+  const points = new THREE.Points(geometry, material);
+  points.userData.material = material;
+  return points;
 }
+const particles = makeParticles();
+scene.add(particles);
+
+function setStatus(text) {
+  state.status = text;
+  statusText.textContent = text;
+  debugBox.textContent = [
+    `status: ${text}`,
+    `video: ${state.videoReady ? `${video.videoWidth}x${video.videoHeight}` : 'not ready'}`,
+    `mirror: ${mirrorCheck.checked}`,
+    `local: ${location.origin}`
+  ].join('\n');
+}
+
+function updatePlaneAspect() {
+  if (!video.videoWidth || !video.videoHeight) return;
+  const videoAspect = video.videoWidth / video.videoHeight;
+  const targetHeight = 2.8;
+  const targetWidth = targetHeight * videoAspect;
+  screen.geometry.dispose();
+  screen.geometry = new THREE.PlaneGeometry(targetWidth, targetHeight, 1, 1);
+}
+
+async function startCamera() {
+  try {
+    setStatus('カメラ許可待ち...');
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: {
+        width: { ideal: 1280 },
+        height: { ideal: 720 },
+        facingMode: 'user'
+      },
+      audio: false
+    });
+    state.stream = stream;
+    video.srcObject = stream;
+    await video.play();
+    await new Promise((resolve) => {
+      if (video.videoWidth) resolve();
+      else video.onloadedmetadata = resolve;
+    });
+    state.videoReady = true;
+    updatePlaneAspect();
+    captionText.textContent = 'Webカメラ映像をホログラム化しています。背景フェードは、暗い背景ほど綺麗に効きます。';
+    setStatus('カメラ起動中');
+  } catch (error) {
+    console.error(error);
+    setStatus('カメラ起動失敗');
+    captionText.textContent = 'カメラを起動できませんでした。localhost または HTTPS で開いているか、ブラウザのカメラ許可を確認してください。';
+  }
+}
+
+function stopCamera() {
+  if (state.stream) {
+    state.stream.getTracks().forEach((track) => track.stop());
+  }
+  state.stream = null;
+  state.videoReady = false;
+  video.srcObject = null;
+  setStatus('停止中');
+}
+
+function speakMock() {
+  state.talking = true;
+  captionText.textContent = 'こんにちは。リアルタイムWebカメラ映像を、白基調のホログラムとして投影しています。';
+  if ('speechSynthesis' in window) {
+    window.speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(captionText.textContent);
+    u.lang = 'ja-JP';
+    u.rate = 0.92;
+    u.pitch = 0.82;
+    u.onend = () => { state.talking = false; };
+    u.onerror = () => { state.talking = false; };
+    window.speechSynthesis.speak(u);
+  } else {
+    window.setTimeout(() => { state.talking = false; }, 4500);
+  }
+}
+
+function triggerGlitch() {
+  state.glitch = 1;
+  window.setTimeout(() => { state.glitch = 0; }, 360);
+}
+
+function syncUniforms() {
+  uniforms.uAlpha.value = Number(alphaRange.value);
+  uniforms.uGlow.value = Number(glowRange.value);
+  uniforms.uShadow.value = Number(shadowRange.value);
+  uniforms.uScan.value = Number(scanRange.value);
+  uniforms.uNoise.value = Number(noiseRange.value);
+  uniforms.uCut.value = Number(cutRange.value);
+  uniforms.uMirror.value = mirrorCheck.checked ? 1 : 0;
+  screen.scale.setScalar(Number(scaleRange.value));
+}
+
+function resize() {
+  const width = stage.clientWidth;
+  const height = stage.clientHeight;
+  camera.aspect = width / height;
+  camera.updateProjectionMatrix();
+  renderer.setSize(width, height);
+}
+
+const clock = new THREE.Clock();
+function animate() {
+  const elapsed = clock.elapsedTime;
+  const delta = clock.getDelta();
+  syncUniforms();
+
+  const targetTalk = state.talking ? (0.55 + Math.sin(elapsed * 14.0) * 0.35) : 0;
+  state.talkPulse += (targetTalk - state.talkPulse) * Math.min(1, delta * 8);
+  state.glitch += (0 - state.glitch) * Math.min(1, delta * 6);
+
+  uniforms.uTime.value = elapsed;
+  uniforms.uTalk.value = Math.max(0, state.talkPulse);
+  uniforms.uGlitch.value = Math.max(0, state.glitch);
+  particles.userData.material.uniforms.uTime.value = elapsed;
+
+  root.position.y = Math.sin(elapsed * 0.6) * 0.025;
+  root.rotation.y = Math.sin(elapsed * 0.22) * 0.035;
+  baseDisc.scale.setScalar(1 + Math.sin(elapsed * 1.5) * 0.035 + state.talkPulse * 0.07);
+  baseCone.material.opacity = 0.040 + state.talkPulse * 0.05;
+
+  renderer.render(scene, camera);
+  requestAnimationFrame(animate);
+}
+
+startBtn.addEventListener('click', startCamera);
+stopBtn.addEventListener('click', stopCamera);
+mockBtn.addEventListener('click', speakMock);
+snapshotBtn.addEventListener('click', triggerGlitch);
+window.addEventListener('resize', resize);
+video.addEventListener('loadedmetadata', updatePlaneAspect);
+
+resize();
+setStatus('standby');
+animate();
