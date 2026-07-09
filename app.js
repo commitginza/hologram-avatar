@@ -10,11 +10,11 @@ const MODEL_URL = CONFIG.MODEL_URL || 'https://watchimg.s3.ap-northeast-1.amazon
 // 向きが逆の場合は yawDeg を -90 または 180 に変更してください。
 const AVATAR_VIEW = {
   // 正面向き調整。横向きなら 90 / -90 / 180 を試す。
-  yawDeg: 90,
+  yawDeg: -90,
 
   // アバター全体の位置。zをマイナスにすると奥へ移動します。
   x: 0,
-  y: -0.28,
+  y: 5.28,
   z: -1.2,
 
   // カメラ距離。大きいほど引きで表示されます。
