@@ -473,8 +473,8 @@ function speakWithBrowser(text, onEnd) {
   window.speechSynthesis.cancel();
   const utterance = new SpeechSynthesisUtterance(text);
   utterance.lang = 'ja-JP';
-  utterance.rate = 0.92;
-  utterance.pitch = 0.78;
+  utterance.rate = 0.72;
+  utterance.pitch = 0.33;
   utterance.onend = onEnd;
   utterance.onerror = onEnd;
   window.speechSynthesis.speak(utterance);
