@@ -5,7 +5,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 const APP_VERSION = 's3-glb-20260709-1';
 console.info('[app] version', APP_VERSION);
 
-const MODEL_URL = 'https://watchimg.s3.ap-northeast-1.amazonaws.com/glb/avatar-v1.glb';
+const MODEL_URL = 'https://watchimg.s3.ap-northeast-1.amazonaws.com/glb/avatar-v2.glb';
 
 const stage = document.getElementById('stage');
 const loading = document.getElementById('loading');
