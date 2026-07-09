@@ -1,21 +1,7 @@
 {
-  "file": "models/avatar.glb",
-  "generator": "Tripo",
-  "extensionsUsed": [
-    "KHR_materials_volume",
-    "FB_ngon_encoding"
-  ],
-  "meshCount": 1,
-  "nodeCount": 1,
-  "materialCount": 1,
-  "animationCount": 0,
-  "skinCount": 0,
-  "meshes": [
-    {
-      "index": 0,
-      "name": "meshes[0]",
-      "primitiveCount": 1,
-      "morphTargetCount": 0
-    }
-  ]
+  "file": "https://watchimg.s3.ap-northeast-1.amazonaws.com/glb/humanoid+character+allien+3d+model.glb",
+  "storage": "S3",
+  "bucket": "watchimg",
+  "region": "ap-northeast-1",
+  "note": "This viewer loads the GLB from S3. GitHub does not need to contain the .glb file."
 }

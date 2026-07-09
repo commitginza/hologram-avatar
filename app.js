@@ -2,10 +2,10 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
-const APP_VERSION = 'custom-glb-20260709-1';
+const APP_VERSION = 's3-glb-20260709-1';
 console.info('[app] version', APP_VERSION);
 
-const MODEL_URL = './models/avatar.glb';
+const MODEL_URL = 'https://watchimg.s3.ap-northeast-1.amazonaws.com/glb/humanoid+character+allien+3d+model.glb';
 
 const stage = document.getElementById('stage');
 const loading = document.getElementById('loading');
@@ -239,7 +239,18 @@ root.add(baseDisc);
 function loadGltf(url) {
   return new Promise((resolve, reject) => {
     const loader = new GLTFLoader();
-    loader.load(url, resolve, undefined, reject);
+    // S3など別ドメインのGLBを読むためにCORS対応を明示します。
+    // S3側にもCORS設定が必要です。
+    loader.setCrossOrigin('anonymous');
+    loader.load(
+      url,
+      resolve,
+      undefined,
+      (error) => {
+        console.error('[GLB load error]', error);
+        reject(error);
+      }
+    );
   });
 }
 
@@ -556,6 +567,6 @@ resize();
 animate();
 loadAvatar().catch((error) => {
   console.error(error);
-  loading.textContent = `GLB読み込み失敗: ${error.message || error}`;
+  loading.textContent = `GLB読み込み失敗: ${error.message || error} / S3の公開設定・CORS・URLを確認してください。`;
   statusText.textContent = 'error';
 });
