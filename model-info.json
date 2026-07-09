@@ -1,0 +1,21 @@
+{
+  "file": "models/avatar.glb",
+  "generator": "Tripo",
+  "extensionsUsed": [
+    "KHR_materials_volume",
+    "FB_ngon_encoding"
+  ],
+  "meshCount": 1,
+  "nodeCount": 1,
+  "materialCount": 1,
+  "animationCount": 0,
+  "skinCount": 0,
+  "meshes": [
+    {
+      "index": 0,
+      "name": "meshes[0]",
+      "primitiveCount": 1,
+      "morphTargetCount": 0
+    }
+  ]
+}

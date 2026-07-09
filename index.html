@@ -3,82 +3,102 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Webcam Hologram Live Mock</title>
-  <link rel="stylesheet" href="./styles.css" />
+  <title>Custom GLB Hologram Viewer</title>
   <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="./styles.css" />
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/"
+    }
+  }
+  </script>
 </head>
 <body>
   <main class="app-shell">
-    <section class="stage-card">
-      <div id="stage" class="stage" aria-label="webcam hologram stage">
-        <div class="status-overlay" id="statusOverlay">
-          <div class="status-title">WEBCAM HOLOGRAM</div>
-          <div class="status-text" id="statusText">カメラを起動してください</div>
-        </div>
+    <section class="stage-panel">
+      <div id="stage" class="stage">
+        <div class="scanline-overlay" aria-hidden="true"></div>
+        <div id="loading" class="loading">GLBを読み込み中...</div>
       </div>
-      <div class="caption" id="captionText">Webカメラ映像をリアルタイムにホログラム風で表示します。</div>
+      <div class="caption-bar">
+        <div class="caption-label">AI HOLOGRAM</div>
+        <div id="captionText" class="caption-text">カスタムGLBホログラムビューアです。右側の「会話モック再生」を押すと発話演出を確認できます。</div>
+      </div>
     </section>
 
-    <aside class="panel">
-      <h1>Webカメラ<br>ホログラム</h1>
-      <p class="note">
-        カメラ映像はブラウザ内だけで処理します。サーバー送信・録画はしていません。
-      </p>
+    <aside class="control-panel">
+      <h1>Custom GLB Hologram</h1>
+      <p class="lead">アップロードされたGLBをローカルで表示・調整するための資材です。</p>
 
       <div class="button-row">
-        <button id="startBtn" class="primary">カメラ起動</button>
-        <button id="stopBtn">停止</button>
+        <button id="playBtn" type="button">会話モック再生</button>
+        <button id="stopBtn" type="button" class="secondary">停止</button>
       </div>
 
       <div class="button-row">
-        <button id="mockBtn">会話モック再生</button>
-        <button id="snapshotBtn">一瞬グリッチ</button>
+        <button id="bustPresetBtn" type="button" class="secondary">胸上プリセット</button>
+        <button id="fullPresetBtn" type="button" class="secondary">全身プリセット</button>
       </div>
 
-      <label>
-        透明度
-        <input id="alphaRange" type="range" min="0.10" max="1.00" step="0.01" value="0.76" />
+      <label class="toggle-row">
+        <input id="useOriginalMaterial" type="checkbox" />
+        <span>元のテクスチャを表示</span>
       </label>
 
-      <label>
-        白発光
-        <input id="glowRange" type="range" min="0.00" max="2.40" step="0.01" value="1.15" />
+      <label class="toggle-row">
+        <input id="showWire" type="checkbox" />
+        <span>ワイヤー表示</span>
       </label>
 
-      <label>
-        影の濃さ
-        <input id="shadowRange" type="range" min="0.00" max="1.00" step="0.01" value="0.38" />
-      </label>
+      <div class="control-group">
+        <label for="scaleRange">表示サイズ</label>
+        <input id="scaleRange" type="range" min="0.45" max="3.80" step="0.01" value="1.85" />
+      </div>
+      <div class="control-group">
+        <label for="yRange">上下位置</label>
+        <input id="yRange" type="range" min="-3.20" max="2.40" step="0.01" value="-1.05" />
+      </div>
+      <div class="control-group">
+        <label for="rotRange">左右回転</label>
+        <input id="rotRange" type="range" min="-45" max="45" step="1" value="0" />
+      </div>
+      <div class="control-group">
+        <label for="depthRange">奥行き</label>
+        <input id="depthRange" type="range" min="0.18" max="1.25" step="0.01" value="0.62" />
+      </div>
+      <div class="control-group">
+        <label for="opacityRange">透明度</label>
+        <input id="opacityRange" type="range" min="0.12" max="0.95" step="0.01" value="0.48" />
+      </div>
+      <div class="control-group">
+        <label for="glowRange">白発光</label>
+        <input id="glowRange" type="range" min="0.00" max="1.80" step="0.01" value="0.58" />
+      </div>
+      <div class="control-group">
+        <label for="scanRange">スキャンライン</label>
+        <input id="scanRange" type="range" min="0.00" max="1.00" step="0.01" value="0.22" />
+      </div>
+      <div class="control-group">
+        <label for="noiseRange">ノイズ</label>
+        <input id="noiseRange" type="range" min="0.00" max="1.00" step="0.01" value="0.13" />
+      </div>
 
-      <label>
-        スキャンライン
-        <input id="scanRange" type="range" min="0.00" max="1.00" step="0.01" value="0.42" />
-      </label>
+      <section class="status-box">
+        <div><span>状態</span><strong id="statusText">standby</strong></div>
+        <div><span>口パク</span><strong id="mouthStatus">checking...</strong></div>
+        <div><span>Mesh</span><strong id="meshCount">-</strong></div>
+        <div><span>Morph</span><strong id="morphCount">-</strong></div>
+      </section>
 
-      <label>
-        ノイズ
-        <input id="noiseRange" type="range" min="0.00" max="1.00" step="0.01" value="0.26" />
-      </label>
-
-      <label>
-        背景フェード
-        <input id="cutRange" type="range" min="0.00" max="0.90" step="0.01" value="0.16" />
-      </label>
-
-      <label>
-        表示サイズ
-        <input id="scaleRange" type="range" min="0.70" max="1.65" step="0.01" value="1.00" />
-      </label>
-
-      <label class="check-row">
-        <input id="mirrorCheck" type="checkbox" checked />
-        左右反転する
-      </label>
-
-      <pre id="debugBox">status: standby</pre>
+      <details open class="debug-box">
+        <summary>GLB情報</summary>
+        <pre id="debugInfo">loading...</pre>
+      </details>
     </aside>
   </main>
 
-  <script type="module" src="./app.js?v=webcam-hologram-1"></script>
+  <script type="module" src="./app.js?v=20260709-custom-glb-1"></script>
 </body>
 </html>
