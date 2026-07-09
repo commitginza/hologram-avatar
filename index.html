@@ -2,103 +2,33 @@
 <html lang="ja">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>S3 GLB Hologram Viewer</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Hologram Voice Avatar</title>
   <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
   <link rel="stylesheet" href="./styles.css" />
-  <script type="importmap">
-  {
-    "imports": {
-      "three": "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js",
-      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/"
-    }
-  }
-  </script>
 </head>
 <body>
-  <main class="app-shell">
-    <section class="stage-panel">
-      <div id="stage" class="stage">
-        <div class="scanline-overlay" aria-hidden="true"></div>
-        <div id="loading" class="loading">GLBを読み込み中...</div>
-      </div>
-      <div class="caption-bar">
-        <div class="caption-label">AI HOLOGRAM</div>
-        <div id="captionText" class="caption-text">カスタムGLBホログラムビューアです。右側の「会話モック再生」を押すと発話演出を確認できます。</div>
-      </div>
+  <main id="app">
+    <section id="stage" aria-label="Hologram avatar stage">
+      <div class="grid-layer"></div>
+      <div class="vignette"></div>
     </section>
 
-    <aside class="control-panel">
-      <h1>Custom GLB Hologram</h1>
-      <p class="lead">S3上のGLBを表示・調整するための資材です。</p>
+    <div class="subtitle-panel">
+      <div class="subtitle-label">HOLOGRAM AI CONCIERGE</div>
+      <div id="subtitle" class="subtitle">マイクボタンを押して話しかけてください。</div>
+      <div id="transcript" class="transcript"></div>
+    </div>
 
-      <div class="button-row">
-        <button id="playBtn" type="button">会話モック再生</button>
-        <button id="stopBtn" type="button" class="secondary">停止</button>
-      </div>
-
-      <div class="button-row">
-        <button id="bustPresetBtn" type="button" class="secondary">胸上プリセット</button>
-        <button id="fullPresetBtn" type="button" class="secondary">全身プリセット</button>
-      </div>
-
-      <label class="toggle-row">
-        <input id="useOriginalMaterial" type="checkbox" />
-        <span>元のテクスチャを表示</span>
-      </label>
-
-      <label class="toggle-row">
-        <input id="showWire" type="checkbox" />
-        <span>ワイヤー表示</span>
-      </label>
-
-      <div class="control-group">
-        <label for="scaleRange">表示サイズ</label>
-        <input id="scaleRange" type="range" min="0.45" max="3.80" step="0.01" value="1.85" />
-      </div>
-      <div class="control-group">
-        <label for="yRange">上下位置</label>
-        <input id="yRange" type="range" min="-3.20" max="2.40" step="0.01" value="-1.05" />
-      </div>
-      <div class="control-group">
-        <label for="rotRange">左右回転</label>
-        <input id="rotRange" type="range" min="-45" max="45" step="1" value="0" />
-      </div>
-      <div class="control-group">
-        <label for="depthRange">奥行き</label>
-        <input id="depthRange" type="range" min="0.18" max="1.25" step="0.01" value="0.62" />
-      </div>
-      <div class="control-group">
-        <label for="opacityRange">透明度</label>
-        <input id="opacityRange" type="range" min="0.12" max="0.95" step="0.01" value="0.48" />
-      </div>
-      <div class="control-group">
-        <label for="glowRange">白発光</label>
-        <input id="glowRange" type="range" min="0.00" max="1.80" step="0.01" value="0.58" />
-      </div>
-      <div class="control-group">
-        <label for="scanRange">スキャンライン</label>
-        <input id="scanRange" type="range" min="0.00" max="1.00" step="0.01" value="0.22" />
-      </div>
-      <div class="control-group">
-        <label for="noiseRange">ノイズ</label>
-        <input id="noiseRange" type="range" min="0.00" max="1.00" step="0.01" value="0.13" />
-      </div>
-
-      <section class="status-box">
-        <div><span>状態</span><strong id="statusText">standby</strong></div>
-        <div><span>口パク</span><strong id="mouthStatus">checking...</strong></div>
-        <div><span>Mesh</span><strong id="meshCount">-</strong></div>
-        <div><span>Morph</span><strong id="morphCount">-</strong></div>
-      </section>
-
-      <details open class="debug-box">
-        <summary>GLB情報</summary>
-        <pre id="debugInfo">loading...</pre>
-      </details>
-    </aside>
+    <div class="mic-panel">
+      <button id="micButton" class="mic-button" type="button" aria-label="マイク開始">
+        <span class="mic-icon">●</span>
+      </button>
+      <div id="status" class="status">standby</div>
+    </div>
   </main>
 
-  <script type="module" src="./app.js?v=20260709-s3-glb-1"></script>
+  <script src="./config.js"></script>
+  <script type="module" src="./app.js?v=20260709-1"></script>
 </body>
 </html>

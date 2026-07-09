@@ -1,196 +1,161 @@
-import * as THREE from 'three';
-import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js';
+import { GLTFLoader } from 'https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/loaders/GLTFLoader.js';
 
-const APP_VERSION = 's3-glb-20260709-1';
-console.info('[app] version', APP_VERSION);
-
-const MODEL_URL = 'https://watchimg.s3.ap-northeast-1.amazonaws.com/glb/avatar-v2.glb';
+const CONFIG = window.HOLOGRAM_CONFIG || {};
+const API_URL = CONFIG.API_URL || '';
+const MODEL_URL = CONFIG.MODEL_URL || 'https://watchimg.s3.ap-northeast-1.amazonaws.com/glb/avatar-v1.glb';
 
 const stage = document.getElementById('stage');
-const loading = document.getElementById('loading');
-const captionText = document.getElementById('captionText');
-const statusText = document.getElementById('statusText');
-const mouthStatus = document.getElementById('mouthStatus');
-const meshCountEl = document.getElementById('meshCount');
-const morphCountEl = document.getElementById('morphCount');
-const debugInfo = document.getElementById('debugInfo');
-const playBtn = document.getElementById('playBtn');
-const stopBtn = document.getElementById('stopBtn');
-const bustPresetBtn = document.getElementById('bustPresetBtn');
-const fullPresetBtn = document.getElementById('fullPresetBtn');
-const useOriginalMaterialEl = document.getElementById('useOriginalMaterial');
-const showWireEl = document.getElementById('showWire');
-const scaleRange = document.getElementById('scaleRange');
-const yRange = document.getElementById('yRange');
-const rotRange = document.getElementById('rotRange');
-const depthRange = document.getElementById('depthRange');
-const opacityRange = document.getElementById('opacityRange');
-const glowRange = document.getElementById('glowRange');
-const scanRange = document.getElementById('scanRange');
-const noiseRange = document.getElementById('noiseRange');
+const micButton = document.getElementById('micButton');
+const statusEl = document.getElementById('status');
+const subtitleEl = document.getElementById('subtitle');
+const transcriptEl = document.getElementById('transcript');
 
-const renderer = new THREE.WebGLRenderer({
-  antialias: true,
-  alpha: true,
-  powerPreference: 'default',
-  failIfMajorPerformanceCaveat: false
-});
+const state = {
+  mediaRecorder: null,
+  chunks: [],
+  recording: false,
+  busy: false,
+  talking: false,
+  talkLevel: 0,
+  captionText: '',
+  captionIndex: 0,
+  captionTimer: 0,
+  audio: null,
+  sessionId: crypto.randomUUID?.() || String(Date.now())
+};
+
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(stage.clientWidth, stage.clientHeight);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
-renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 0.95;
 stage.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
-scene.fog = new THREE.FogExp2(0x03060a, 0.045);
+scene.fog = new THREE.FogExp2(0x020812, 0.055);
 
-const camera = new THREE.PerspectiveCamera(35, stage.clientWidth / stage.clientHeight, 0.05, 100);
-camera.position.set(0, 0.1, 6.4);
-
-const controls = new OrbitControls(camera, renderer.domElement);
-controls.enableDamping = true;
-controls.dampingFactor = 0.06;
-controls.enablePan = false;
-controls.target.set(0, 0.28, 0);
+const camera = new THREE.PerspectiveCamera(32, stage.clientWidth / stage.clientHeight, 0.1, 100);
+camera.position.set(0, 0.35, 6.4);
 
 const root = new THREE.Group();
 scene.add(root);
 
-const modelHolder = new THREE.Group();
-root.add(modelHolder);
+const avatarGroup = new THREE.Group();
+avatarGroup.position.set(0, -0.28, 0);
+root.add(avatarGroup);
 
 const clock = new THREE.Clock();
+const avatarMaterials = [];
+let avatarRoot = null;
+let baseDisc = null;
+let baseCone = null;
 
-const state = {
-  loaded: false,
-  speaking: false,
-  mouth: 0,
-  targetMouth: 0,
-  talkIntensity: 0,
-  captionTimer: 0,
-  captionCursor: 0,
-  currentCaption: '',
-  originalMaterials: new Map(),
-  meshes: [],
-  wireObjects: [],
-  morphMeshes: [],
-  morphDictNames: new Set(),
-  baseScale: 1,
-  fitHeight: 3.2
-};
+const ambient = new THREE.AmbientLight(0xffffff, 0.85);
+scene.add(ambient);
 
-scene.add(new THREE.AmbientLight(0xffffff, 1.1));
-const key = new THREE.DirectionalLight(0xffffff, 2.2);
-key.position.set(-2.3, 2.6, 3.2);
+const key = new THREE.DirectionalLight(0xffffff, 2.0);
+key.position.set(-1.2, 2.2, 3.4);
 scene.add(key);
-const fill = new THREE.DirectionalLight(0xdce7ee, 0.9);
-fill.position.set(2.0, 1.3, 1.5);
-scene.add(fill);
-const rim = new THREE.DirectionalLight(0xffffff, 1.35);
-rim.position.set(0, 1.7, -2.2);
+
+const rim = new THREE.DirectionalLight(0xd7f6ff, 1.5);
+rim.position.set(0, 1.3, -2.2);
 scene.add(rim);
 
-const holoUniforms = {
-  uTime: { value: 0 },
-  uOpacity: { value: Number(opacityRange.value) },
-  uGlow: { value: Number(glowRange.value) },
-  uScan: { value: Number(scanRange.value) },
-  uNoise: { value: Number(noiseRange.value) },
-  uTalk: { value: 0 }
-};
+function setStatus(text) {
+  statusEl.textContent = text;
+}
 
-const hologramMaterial = new THREE.ShaderMaterial({
-  transparent: true,
-  depthWrite: false,
-  depthTest: true,
-  side: THREE.FrontSide,
-  blending: THREE.NormalBlending,
-  uniforms: holoUniforms,
-  vertexShader: `
-    uniform float uTime;
-    uniform float uTalk;
-    uniform float uNoise;
-    varying vec3 vNormalV;
-    varying vec3 vViewPos;
-    varying float vWorldY;
-    varying float vNoise;
+function setSubtitle(text) {
+  subtitleEl.textContent = text;
+}
 
-    float hash(vec3 p) {
-      p = fract(p * 0.3183099 + vec3(0.11, 0.27, 0.39));
-      p *= 17.0;
-      return fract(p.x * p.y * p.z * (p.x + p.y + p.z));
-    }
+function setTranscript(text) {
+  transcriptEl.textContent = text ? `認識: ${text}` : '';
+}
 
-    void main() {
-      vec3 displaced = position;
-      float n = hash(position + uTime * 0.035) - 0.5;
-      float scanWave = sin(position.y * 18.0 + uTime * 3.2) * 0.0035;
-      displaced += normal * (n * 0.012 * uNoise + scanWave + uTalk * 0.0025);
+function resize() {
+  const width = stage.clientWidth;
+  const height = stage.clientHeight;
+  camera.aspect = width / height;
+  camera.updateProjectionMatrix();
+  renderer.setSize(width, height);
+}
+window.addEventListener('resize', resize);
 
-      vec4 worldPosition = modelMatrix * vec4(displaced, 1.0);
-      vec4 mvPosition = modelViewMatrix * vec4(displaced, 1.0);
-      vWorldY = worldPosition.y;
-      vViewPos = -mvPosition.xyz;
-      vNormalV = normalize(normalMatrix * normal);
-      vNoise = n;
-      gl_Position = projectionMatrix * mvPosition;
-    }
-  `,
-  fragmentShader: `
-    uniform float uTime;
-    uniform float uOpacity;
-    uniform float uGlow;
-    uniform float uScan;
-    uniform float uTalk;
-    varying vec3 vNormalV;
-    varying vec3 vViewPos;
-    varying float vWorldY;
-    varying float vNoise;
+function buildHologramMaterial() {
+  return new THREE.MeshPhysicalMaterial({
+    color: 0xeef6fb,
+    roughness: 0.42,
+    metalness: 0.0,
+    transparent: true,
+    opacity: 0.58,
+    emissive: 0xeaf8ff,
+    emissiveIntensity: 0.018,
+    depthWrite: false,
+    side: THREE.FrontSide
+  });
+}
 
-    void main() {
-      vec3 N = normalize(vNormalV);
-      vec3 V = normalize(vViewPos);
-      float facing = clamp(dot(N, V), 0.0, 1.0);
-      float fresnel = pow(1.0 - facing, 2.05);
-      float shadow = pow(1.0 - facing, 0.65);
-      float scanRaw = sin(vWorldY * 95.0 - uTime * 11.0);
-      float scan = smoothstep(0.82, 1.0, scanRaw) * uScan;
-      float band = smoothstep(0.04, 0.18, abs(fract(vWorldY * 1.08 - uTime * 0.10) - 0.5));
+function applyHologramMaterial(object) {
+  object.traverse((child) => {
+    if (!child.isMesh) return;
+    const mat = buildHologramMaterial();
+    child.material = mat;
+    child.frustumCulled = false;
+    child.renderOrder = 1;
+    avatarMaterials.push(mat);
+  });
+}
 
-      vec3 whiteBase = vec3(0.96, 0.98, 1.0);
-      vec3 shadowTone = vec3(0.17, 0.19, 0.21);
-      vec3 color = mix(whiteBase, shadowTone, shadow * 0.42);
-      color += vec3(1.0) * (fresnel * 0.55 + scan * 0.28 + uTalk * 0.10 + uGlow * 0.12);
-      color += vec3(vNoise * 0.04);
+function fitModel(object) {
+  object.updateMatrixWorld(true);
+  const box = new THREE.Box3().setFromObject(object);
+  const size = box.getSize(new THREE.Vector3());
+  const center = box.getCenter(new THREE.Vector3());
 
-      float alpha = uOpacity * (0.58 + fresnel * 0.36 + scan * 0.10 + band * 0.08 + uTalk * 0.06);
-      alpha = clamp(alpha, 0.0, 0.94);
-      gl_FragColor = vec4(color, alpha);
-    }
-  `
-});
+  // 全身プリセット固定。画面内に全身が入るように高さ基準でフィット。
+  const targetHeight = 4.65;
+  const scale = targetHeight / Math.max(size.y, 0.0001);
+  object.scale.setScalar(scale);
+  object.position.set(-center.x * scale, -center.y * scale - 0.35, -center.z * scale);
+}
 
-const wireMaterial = new THREE.LineBasicMaterial({
-  color: 0xffffff,
-  transparent: true,
-  opacity: 0.12,
-  depthWrite: false
-});
+async function loadAvatar() {
+  setStatus('loading');
+  const loader = new GLTFLoader();
+  loader.setCrossOrigin('anonymous');
 
-function createBackgroundParticles(count = 170) {
+  const gltf = await loader.loadAsync(MODEL_URL);
+  avatarRoot = gltf.scene;
+  console.group('[GLB structure]');
+  avatarRoot.traverse((child) => {
+    if (!child.isMesh) return;
+    console.log({
+      name: child.name,
+      vertexCount: child.geometry?.attributes?.position?.count,
+      morphTargetDictionary: child.morphTargetDictionary || null,
+      material: child.material?.name || null
+    });
+  });
+  console.groupEnd();
+
+  applyHologramMaterial(avatarRoot);
+  fitModel(avatarRoot);
+  avatarGroup.add(avatarRoot);
+  setStatus('standby');
+}
+
+function createBackgroundParticles(count = 180) {
   const positions = [];
   const sizes = [];
   for (let i = 0; i < count; i += 1) {
     positions.push(
-      (Math.random() - 0.5) * 9,
-      (Math.random() - 0.5) * 6,
-      -2.3 - Math.random() * 5.2
+      (Math.random() - 0.5) * 9.5,
+      (Math.random() - 0.5) * 6.0,
+      -2.0 - Math.random() * 6.0
     );
     sizes.push(0.4 + Math.random() * 0.8);
   }
-
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
   geometry.setAttribute('aSize', new THREE.Float32BufferAttribute(sizes, 1));
@@ -204,11 +169,11 @@ function createBackgroundParticles(count = 170) {
       varying float vFade;
       void main() {
         vec3 p = position;
-        p.y += sin(uTime * 0.25 + position.x * 1.7) * 0.018;
+        p.y += sin(uTime * 0.24 + position.x * 1.4) * 0.024;
         vec4 mv = modelViewMatrix * vec4(p, 1.0);
         gl_PointSize = aSize * (16.0 / -mv.z);
         gl_Position = projectionMatrix * mv;
-        vFade = 0.35 + 0.28 * sin(uTime + position.x * 2.2 + position.y * 3.3);
+        vFade = 0.30 + 0.30 * sin(uTime + position.x * 3.7 + position.y * 4.2);
       }
     `,
     fragmentShader: `
@@ -216,357 +181,248 @@ function createBackgroundParticles(count = 170) {
       void main() {
         vec2 uv = gl_PointCoord - vec2(0.5);
         float d = length(uv);
-        float a = smoothstep(0.5, 0.0, d) * vFade;
-        gl_FragColor = vec4(0.92, 0.97, 1.0, a * 0.45);
+        float alpha = smoothstep(0.5, 0.0, d) * vFade;
+        gl_FragColor = vec4(0.82, 0.94, 1.0, alpha * 0.7);
       }
     `
   });
   const points = new THREE.Points(geometry, material);
   points.userData.material = material;
+  scene.add(points);
   return points;
 }
 
 const particles = createBackgroundParticles();
-scene.add(particles);
 
-const baseDisc = new THREE.Mesh(
-  new THREE.CylinderGeometry(0.55, 0.55, 0.018, 128, 1, true),
-  new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.10, depthWrite: false })
-);
-baseDisc.position.y = -2.18;
-root.add(baseDisc);
+function createProjectionBase() {
+  const group = new THREE.Group();
+  group.position.set(0, -2.55, 0);
+  root.add(group);
 
-function loadGltf(url) {
-  return new Promise((resolve, reject) => {
-    const loader = new GLTFLoader();
-    // S3など別ドメインのGLBを読むためにCORS対応を明示します。
-    // S3側にもCORS設定が必要です。
-    loader.setCrossOrigin('anonymous');
-    loader.load(
-      url,
-      resolve,
-      undefined,
-      (error) => {
-        console.error('[GLB load error]', error);
-        reject(error);
-      }
-    );
-  });
+  baseDisc = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.62, 0.62, 0.018, 96, 1, true),
+    new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.12, depthWrite: false })
+  );
+  baseCone = new THREE.Mesh(
+    new THREE.ConeGeometry(0.36, 0.82, 64, 1, true),
+    new THREE.MeshBasicMaterial({ color: 0xeaf8ff, transparent: true, opacity: 0.05, depthWrite: false, side: THREE.DoubleSide })
+  );
+  baseCone.position.y = 0.40;
+  group.add(baseDisc, baseCone);
+}
+createProjectionBase();
+
+function setMicUi() {
+  micButton.classList.toggle('recording', state.recording);
+  micButton.classList.toggle('busy', state.busy);
+  micButton.disabled = state.busy && !state.recording;
+  micButton.setAttribute('aria-label', state.recording ? '録音停止' : 'マイク開始');
 }
 
-function recordOriginalMaterials(object) {
-  object.traverse((child) => {
-    if (!child.isMesh) return;
-    state.originalMaterials.set(child.uuid, child.material);
-  });
+function getRecorderMimeType() {
+  const candidates = [
+    'audio/webm;codecs=opus',
+    'audio/webm',
+    'audio/mp4'
+  ];
+  return candidates.find((type) => window.MediaRecorder?.isTypeSupported?.(type)) || '';
 }
 
-function applyMaterialMode() {
-  const useOriginal = useOriginalMaterialEl.checked;
-  for (const mesh of state.meshes) {
-    mesh.material = useOriginal ? state.originalMaterials.get(mesh.uuid) : hologramMaterial;
-    mesh.frustumCulled = false;
-    if (!useOriginal) {
-      mesh.material.transparent = true;
-      mesh.material.depthWrite = false;
-    }
+async function startRecording() {
+  if (!API_URL || API_URL.includes('YOUR_API_ID')) {
+    setSubtitle('public/config.js の API_URL に API Gateway の /talk URL を設定してください。');
+    return;
   }
-}
 
-function rebuildWireframes() {
-  for (const wire of state.wireObjects) {
-    wire.parent?.remove(wire);
-    wire.geometry?.dispose?.();
-  }
-  state.wireObjects = [];
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+  const mimeType = getRecorderMimeType();
+  const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+  state.chunks = [];
 
-  if (!showWireEl.checked) return;
-
-  for (const mesh of state.meshes) {
-    const wire = new THREE.LineSegments(new THREE.WireframeGeometry(mesh.geometry), wireMaterial);
-    wire.renderOrder = 10;
-    wire.scale.setScalar(1.001);
-    mesh.add(wire);
-    state.wireObjects.push(wire);
-  }
-}
-
-function fitModelToStage(object) {
-  object.updateMatrixWorld(true);
-  const box = new THREE.Box3().setFromObject(object);
-  const size = box.getSize(new THREE.Vector3());
-  const center = box.getCenter(new THREE.Vector3());
-
-  state.fitHeight = Math.max(size.y, 0.0001);
-  const targetHeight = 3.2;
-  state.baseScale = targetHeight / state.fitHeight;
-
-  object.scale.setScalar(state.baseScale);
-  object.position.set(-center.x * state.baseScale, -center.y * state.baseScale, -center.z * state.baseScale);
-}
-
-function collectModelInfo(rootObject) {
-  const meshes = [];
-  const morphNames = new Set();
-  let vertexTotal = 0;
-  let materialCount = 0;
-
-  rootObject.traverse((child) => {
-    if (!child.isMesh) return;
-    meshes.push(child);
-    vertexTotal += child.geometry?.attributes?.position?.count || 0;
-    materialCount += Array.isArray(child.material) ? child.material.length : 1;
-    if (child.morphTargetDictionary && child.morphTargetInfluences) {
-      state.morphMeshes.push(child);
-      Object.keys(child.morphTargetDictionary).forEach((name) => morphNames.add(name));
-    }
-  });
-
-  state.meshes = meshes;
-  state.morphDictNames = morphNames;
-
-  return {
-    file: MODEL_URL,
-    meshCount: meshes.length,
-    vertexTotal,
-    materialCount,
-    morphMeshCount: state.morphMeshes.length,
-    morphTargetCount: morphNames.size,
-    morphTargets: Array.from(morphNames),
-    meshNames: meshes.map((mesh) => mesh.name || '(unnamed)')
+  recorder.ondataavailable = (event) => {
+    if (event.data && event.data.size > 0) state.chunks.push(event.data);
   };
+  recorder.onstop = async () => {
+    stream.getTracks().forEach((track) => track.stop());
+    const blob = new Blob(state.chunks, { type: recorder.mimeType || 'audio/webm' });
+    await sendAudio(blob);
+  };
+
+  state.mediaRecorder = recorder;
+  state.recording = true;
+  state.busy = false;
+  setMicUi();
+  setStatus('recording');
+  setSubtitle('録音中です。もう一度マイクボタンを押すと送信します。');
+  setTranscript('');
+  recorder.start();
+
+  // Lambda同期payload制限を避けるため、MVPでは録音を短めに制限。
+  window.setTimeout(() => {
+    if (state.recording) stopRecording();
+  }, 18000);
 }
 
-function setMorph(mesh, candidates, value) {
-  const dict = mesh.morphTargetDictionary;
-  const influences = mesh.morphTargetInfluences;
-  if (!dict || !influences) return false;
-  for (const name of candidates) {
-    const index = dict[name];
-    if (index !== undefined) {
-      influences[index] = THREE.MathUtils.clamp(value, 0, 1);
-      return true;
-    }
-  }
-  return false;
+function stopRecording() {
+  if (!state.mediaRecorder || state.mediaRecorder.state === 'inactive') return;
+  state.recording = false;
+  state.busy = true;
+  setMicUi();
+  setStatus('thinking');
+  setSubtitle('音声を解析しています…');
+  state.mediaRecorder.stop();
 }
 
-function resetMorphs() {
-  for (const mesh of state.morphMeshes) {
-    if (!mesh.morphTargetInfluences) continue;
-    mesh.morphTargetInfluences.fill(0);
-  }
+function blobToBase64(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = String(reader.result || '');
+      resolve(result.includes(',') ? result.split(',')[1] : result);
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
 }
 
-function updateMouthMorphs(open) {
-  let applied = false;
-  const jawCandidates = ['jawOpen', 'mouthOpen', 'Mouth_Open', 'mouth_open', 'JawOpen', 'viseme_aa', 'aa', 'A'];
-  const puckerCandidates = ['mouthFunnel', 'mouthPucker', 'Mouth_Pucker', 'mouth_pucker'];
-  for (const mesh of state.morphMeshes) {
-    applied = setMorph(mesh, jawCandidates, open) || applied;
-    setMorph(mesh, puckerCandidates, open * 0.10);
-  }
-  return applied;
-}
-
-function updateTransformFromControls() {
-  const userScale = Number(scaleRange.value);
-  const y = Number(yRange.value);
-  const rot = THREE.MathUtils.degToRad(Number(rotRange.value));
-  const depth = Number(depthRange.value);
-
-  modelHolder.scale.set(userScale, userScale, userScale * depth);
-  modelHolder.position.y = y;
-  modelHolder.rotation.y = rot;
-}
-
-async function loadAvatar() {
-  statusText.textContent = 'loading';
-  const gltf = await loadGltf(MODEL_URL);
-  const avatar = gltf.scene;
-
-  recordOriginalMaterials(avatar);
-  const info = collectModelInfo(avatar);
-  console.group('[GLB structure]');
-  console.log(info);
-  for (const mesh of state.meshes) {
-    console.log({
-      name: mesh.name,
-      vertexCount: mesh.geometry?.attributes?.position?.count,
-      material: Array.isArray(mesh.material) ? mesh.material.map((m) => m?.name) : mesh.material?.name,
-      morphTargetDictionary: mesh.morphTargetDictionary || null
+async function sendAudio(blob) {
+  try {
+    const audioBase64 = await blobToBase64(blob);
+    const response = await fetch(API_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        session_id: state.sessionId,
+        audio_base64: audioBase64,
+        audio_mime_type: blob.type || 'audio/webm'
+      })
     });
-  }
-  console.groupEnd();
 
-  fitModelToStage(avatar);
-  modelHolder.add(avatar);
-
-  applyMaterialMode();
-  rebuildWireframes();
-  updateTransformFromControls();
-
-  meshCountEl.textContent = String(info.meshCount);
-  morphCountEl.textContent = String(info.morphTargetCount);
-  mouthStatus.textContent = info.morphTargetCount > 0 ? 'morph targetあり' : 'morph targetなし';
-  debugInfo.textContent = JSON.stringify(info, null, 2);
-
-  if (info.morphTargetCount === 0) {
-    debugInfo.textContent += '\n\n注意: このGLBにはmorph target / animation / skinが見つかっていません。自然な口パクはできません。発話時は発光演出のみになります。';
-  }
-
-  loading.style.display = 'none';
-  statusText.textContent = 'standby';
-  state.loaded = true;
-}
-
-function startCaption(text) {
-  state.currentCaption = text;
-  state.captionCursor = 0;
-  state.captionTimer = 0;
-  captionText.textContent = '';
-}
-
-function updateCaption(delta) {
-  if (!state.currentCaption) return;
-  state.captionTimer += delta;
-  const interval = 0.024;
-  while (state.captionTimer > interval && state.captionCursor < state.currentCaption.length) {
-    state.captionTimer -= interval;
-    state.captionCursor += 1;
-    captionText.textContent = state.currentCaption.slice(0, state.captionCursor);
-  }
-}
-
-function kanaToMouthSeed(char) {
-  if ('あかさたなはまやらわがざだばぱぁゃゎアカサタナハマヤラワガザダバパァャヮAa'.includes(char)) return 0.92;
-  if ('いきしちにひみりぎじぢびぴぃイキシチニヒミリギジヂビピィIi'.includes(char)) return 0.36;
-  if ('うくすつぬふむゆるぐずづぶぷぅゅウクスツヌフムユルグズヅブプゥュUu'.includes(char)) return 0.58;
-  if ('えけせてねへめれげぜでべぺぇエケセテネヘメレゼデベペェEe'.includes(char)) return 0.50;
-  if ('おこそとのほもよろをごぞどぼぽぉょオコソトノホモヨロヲゴゾドボポォョOo'.includes(char)) return 0.72;
-  if ('。、，,.！？!? 　\n'.includes(char)) return 0.02;
-  return 0.25 + Math.random() * 0.38;
-}
-
-function startMockMouth(text, estimatedSeconds) {
-  clearInterval(state.mouthInterval);
-  const chars = [...text];
-  let i = 0;
-  const interval = Math.max(32, Math.floor((estimatedSeconds * 1000) / Math.max(chars.length, 1)));
-  state.mouthInterval = setInterval(() => {
-    if (!state.speaking) {
-      clearInterval(state.mouthInterval);
-      return;
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(data.detail || data.error || `API error: ${response.status}`);
     }
-    const c = chars[i % chars.length] || ' ';
-    state.targetMouth = kanaToMouthSeed(c);
-    i += 1;
-  }, interval);
-}
 
-function speakWithBrowser(text, onEnd) {
-  if (!('speechSynthesis' in window) || !('SpeechSynthesisUtterance' in window)) {
-    const seconds = Math.max(2.2, text.length * 0.075);
-    window.setTimeout(onEnd, seconds * 1000);
-    return seconds;
+    setTranscript(data.transcript || '');
+    await speakResponse(data);
+  } catch (error) {
+    console.error(error);
+    setSubtitle(`エラー: ${error.message}`);
+    setStatus('error');
+  } finally {
+    state.busy = false;
+    setMicUi();
   }
-  window.speechSynthesis.cancel();
-  const utterance = new SpeechSynthesisUtterance(text);
-  utterance.lang = 'ja-JP';
-  utterance.rate = 0.72;
-  utterance.pitch = 0.33;
-  utterance.onend = onEnd;
-  utterance.onerror = onEnd;
-  window.speechSynthesis.speak(utterance);
-  return Math.max(2.2, text.length * 0.08);
 }
 
-function playMock() {
-  const text = 'このGLBをホログラム表示しています。モデルにモーフターゲットがあれば口パクも接続します。なければ発話中の発光演出だけになります。';
-  state.speaking = true;
-  state.targetMouth = 0.65;
-  statusText.textContent = 'speaking';
-  startCaption(text);
-  const seconds = speakWithBrowser(text, stopMock);
-  startMockMouth(text, seconds);
+function startCaption(text, durationMs = 3000) {
+  state.captionText = String(text || '');
+  state.captionIndex = 0;
+  state.captionTimer = 0;
+  setSubtitle('');
+  state.captionInterval = Math.max(18, durationMs / Math.max(state.captionText.length, 1));
 }
 
-function stopMock() {
-  state.speaking = false;
-  state.targetMouth = 0;
-  clearInterval(state.mouthInterval);
-  window.speechSynthesis?.cancel?.();
-  statusText.textContent = 'standby';
+function updateCaption(deltaMs) {
+  if (!state.captionText) return;
+  if (state.captionIndex >= state.captionText.length) return;
+  state.captionTimer += deltaMs;
+  while (state.captionTimer >= state.captionInterval && state.captionIndex < state.captionText.length) {
+    state.captionTimer -= state.captionInterval;
+    state.captionIndex += 1;
+    setSubtitle(state.captionText.slice(0, state.captionIndex));
+  }
 }
 
-function updateMouth(delta) {
-  state.mouth += (state.targetMouth - state.mouth) * Math.min(1, delta * 13);
-  state.talkIntensity += ((state.speaking ? 1 : 0) - state.talkIntensity) * Math.min(1, delta * 5);
-  const open = Math.min(1, state.mouth * state.talkIntensity);
-  const applied = updateMouthMorphs(open);
-  holoUniforms.uTalk.value = applied ? open * 0.55 : state.talkIntensity * 0.55;
+async function speakResponse(data) {
+  const text = data.display_text || data.speak_text || '回答を生成しました。';
+  const audioBase64 = data.audio_base64;
+  const mime = data.audio_mime_type || 'audio/mpeg';
+
+  if (!audioBase64) {
+    setSubtitle(text);
+    return;
+  }
+
+  if (state.audio) {
+    state.audio.pause();
+    state.audio.src = '';
+  }
+
+  const audio = new Audio(`data:${mime};base64,${audioBase64}`);
+  state.audio = audio;
+
+  audio.addEventListener('play', () => {
+    state.talking = true;
+    setStatus('speaking');
+    startCaption(text, Math.max(2200, (audio.duration || 4) * 1000));
+  });
+  audio.addEventListener('ended', () => {
+    state.talking = false;
+    state.talkLevel = 0;
+    setStatus('standby');
+    setSubtitle(text);
+  });
+  audio.addEventListener('error', () => {
+    state.talking = false;
+    setStatus('standby');
+    setSubtitle(text);
+  });
+
+  await audio.play();
 }
 
-function updateUniforms() {
-  holoUniforms.uOpacity.value = Number(opacityRange.value);
-  holoUniforms.uGlow.value = Number(glowRange.value);
-  holoUniforms.uScan.value = Number(scanRange.value);
-  holoUniforms.uNoise.value = Number(noiseRange.value);
-}
+micButton.addEventListener('click', async () => {
+  try {
+    if (state.recording) {
+      stopRecording();
+    } else {
+      await startRecording();
+    }
+  } catch (error) {
+    console.error(error);
+    state.recording = false;
+    state.busy = false;
+    setMicUi();
+    setStatus('error');
+    setSubtitle(`マイクを開始できません: ${error.message}`);
+  }
+});
 
 function animate() {
   const delta = clock.getDelta();
   const elapsed = clock.elapsedTime;
-  updateCaption(delta);
-  resetMorphs();
-  updateMouth(delta);
-  updateUniforms();
-  updateTransformFromControls();
-  controls.update();
 
-  holoUniforms.uTime.value = elapsed;
   particles.userData.material.uniforms.uTime.value = elapsed;
+  updateCaption(delta * 1000);
 
-  root.position.y = Math.sin(elapsed * 0.72) * 0.018;
-  baseDisc.scale.setScalar(1 + Math.sin(elapsed * 1.7) * 0.035 + state.talkIntensity * 0.04);
+  const targetTalk = state.talking ? 1 : 0;
+  state.talkLevel += (targetTalk - state.talkLevel) * Math.min(1, delta * 4.5);
+
+  if (avatarRoot) {
+    avatarGroup.position.y = -0.28 + Math.sin(elapsed * 0.72) * 0.026;
+    avatarGroup.rotation.y = Math.sin(elapsed * 0.18) * 0.018;
+  }
+
+  for (const mat of avatarMaterials) {
+    mat.opacity = 0.56 + state.talkLevel * 0.12 + Math.sin(elapsed * 5.5) * state.talkLevel * 0.02;
+    mat.emissiveIntensity = 0.016 + state.talkLevel * 0.065;
+  }
+
+  if (baseDisc && baseCone) {
+    baseDisc.scale.setScalar(1 + Math.sin(elapsed * 1.7) * 0.035 + state.talkLevel * 0.08);
+    baseCone.material.opacity = 0.045 + state.talkLevel * 0.065;
+  }
 
   renderer.render(scene, camera);
   requestAnimationFrame(animate);
 }
 
-function resize() {
-  const width = stage.clientWidth;
-  const height = stage.clientHeight;
-  camera.aspect = width / height;
-  camera.updateProjectionMatrix();
-  renderer.setSize(width, height);
-}
-
-function applyPreset(kind) {
-  if (kind === 'bust') {
-    scaleRange.value = '1.85';
-    yRange.value = '-1.05';
-    depthRange.value = '0.62';
-  } else {
-    scaleRange.value = '1.00';
-    yRange.value = '0.00';
-    depthRange.value = '0.74';
-  }
-  updateTransformFromControls();
-}
-
-playBtn.addEventListener('click', playMock);
-stopBtn.addEventListener('click', stopMock);
-bustPresetBtn.addEventListener('click', () => applyPreset('bust'));
-fullPresetBtn.addEventListener('click', () => applyPreset('full'));
-useOriginalMaterialEl.addEventListener('change', applyMaterialMode);
-showWireEl.addEventListener('change', rebuildWireframes);
-window.addEventListener('resize', resize);
-
-resize();
-animate();
+setMicUi();
+setStatus('loading');
 loadAvatar().catch((error) => {
   console.error(error);
-  loading.textContent = `GLB読み込み失敗: ${error.message || error} / S3の公開設定・CORS・URLを確認してください。`;
-  statusText.textContent = 'error';
+  setStatus('error');
+  setSubtitle(`GLB読み込み失敗: ${error.message}`);
 });
+animate();
