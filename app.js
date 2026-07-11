@@ -6,35 +6,54 @@ const API_URL = CONFIG.API_URL || '';
 const MODEL_URL = CONFIG.MODEL_URL || 'https://watchimg.s3.ap-northeast-1.amazonaws.com/glb/avatar-v1.glb';
 
 // ===== Avatar view preset =====
-// 今回のGLBが横向きで表示される場合に、正面を合わせて少し奥へ配置するための推奨値です。
-// 向きが逆の場合は yawDeg を -90 または 180 に変更してください。
+// 今のGLB向けに正面・全身寄りで固定。必要ならここだけ調整してください。
 const AVATAR_VIEW = {
-  // 正面向き調整。横向きなら 90 / -90 / 180 を試す。
   yawDeg: -90,
-
-  // アバター全体の位置。zをマイナスにすると奥へ移動します。
   x: 0,
-  y: 1.00,
+  y: 1.0,
   z: -1.2,
-
-  // カメラ距離。大きいほど引きで表示されます。
   cameraZ: 7.8,
-
-  // 画面内でのモデル高さ。大きいほどアバターが大きくなります。
   targetHeight: 6.25,
-
-  // 待機中の微揺れ。完全固定したい場合は 0 にしてください。
   idleYawDeg: 1.0,
   floatAmount: 0.026
 };
 
+// ===== Live behavior =====
+const LIVE_CONFIG = {
+  // 人検知後、短時間で何度も話しかけないためのクールダウン
+  greetingCooldownMs: 90_000,
+
+  // 会話録音の最大時間。Lambda/API Gatewayの同期ペイロード制限対策で短めにします。
+  maxSpeechMs: 9_000,
+
+  // 無音が続いたら発話終了と判断する時間
+  silenceStopMs: 1_150,
+
+  // 音量しきい値。小さいほど拾いやすいが、環境音で誤検知しやすくなります。
+  vadStartThreshold: 0.030,
+  vadStopThreshold: 0.018,
+
+  // 人検知の安定化
+  presenceHitFrames: 2,
+  presenceLostFrames: 8,
+
+  // 画面内に人がいる状態で、AI発話後に自動待ち受けする
+  enableAutoListen: true
+};
+
 const stage = document.getElementById('stage');
-const micButton = document.getElementById('micButton');
+const cameraVideo = document.getElementById('cameraVideo');
+const visionCanvas = document.getElementById('visionCanvas');
+const startButton = document.getElementById('startButton');
+const permissionOverlay = document.getElementById('permissionOverlay');
 const statusEl = document.getElementById('status');
+const presenceStatusEl = document.getElementById('presenceStatus');
 const subtitleEl = document.getElementById('subtitle');
 const transcriptEl = document.getElementById('transcript');
 
 const state = {
+  videoStream: null,
+  micStream: null,
   mediaRecorder: null,
   chunks: [],
   recording: false,
@@ -44,18 +63,29 @@ const state = {
   captionText: '',
   captionIndex: 0,
   captionTimer: 0,
+  captionInterval: 28,
+  sessionId: crypto.randomUUID?.() || String(Date.now()),
 
-  // ===== Mobile audio playback unlock =====
-  // スマホブラウザでは、API応答後の audio.play() がユーザー操作から離れた再生と判定され、
-  // NotAllowedError 系でブロックされることがあります。
-  // そのため、マイクボタン押下時に AudioContext を一度解放し、TTS再生は Web Audio API で行います。
-  audio: null,
   audioContext: null,
   audioUnlocked: false,
   currentSource: null,
+  analyser: null,
+  micData: null,
   pendingAudio: null,
 
-  sessionId: crypto.randomUUID?.() || String(Date.now())
+  presence: false,
+  presenceHits: 0,
+  presenceLost: 0,
+  lastGreetingAt: 0,
+  faceDetector: null,
+  faceDetectorAvailable: false,
+  backgroundFrame: null,
+  lastVisionCheckAt: 0,
+
+  vadSpeaking: false,
+  speechStartedAt: 0,
+  lastVoiceAt: 0,
+  liveStarted: false
 };
 
 const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
@@ -97,6 +127,10 @@ scene.add(rim);
 
 function setStatus(text) {
   statusEl.textContent = text;
+}
+
+function setPresenceStatus(text) {
+  presenceStatusEl.textContent = text;
 }
 
 function setSubtitle(text) {
@@ -150,10 +184,7 @@ function fitModel(object) {
   const size = box.getSize(new THREE.Vector3());
   const center = box.getCenter(new THREE.Vector3());
 
-  // 全身プリセット固定。画面内に全身が入るように高さ基準でフィット。
-  const targetHeight = AVATAR_VIEW.targetHeight;
-  const scale = targetHeight / Math.max(size.y, 0.0001);
-
+  const scale = AVATAR_VIEW.targetHeight / Math.max(size.y, 0.0001);
   object.scale.setScalar(scale);
   object.position.set(
     -center.x * scale,
@@ -174,7 +205,6 @@ async function loadAvatar() {
   console.group('[GLB structure]');
   avatarRoot.traverse((child) => {
     if (!child.isMesh) return;
-
     console.log({
       name: child.name,
       vertexCount: child.geometry?.attributes?.position?.count,
@@ -211,33 +241,26 @@ function createBackgroundParticles(count = 180) {
   const material = new THREE.ShaderMaterial({
     transparent: true,
     depthWrite: false,
-    uniforms: {
-      uTime: { value: 0 }
-    },
+    uniforms: { uTime: { value: 0 } },
     vertexShader: `
       attribute float aSize;
       uniform float uTime;
       varying float vFade;
-
       void main() {
         vec3 p = position;
         p.y += sin(uTime * 0.24 + position.x * 1.4) * 0.024;
-
         vec4 mv = modelViewMatrix * vec4(p, 1.0);
         gl_PointSize = aSize * (16.0 / -mv.z);
         gl_Position = projectionMatrix * mv;
-
         vFade = 0.30 + 0.30 * sin(uTime + position.x * 3.7 + position.y * 4.2);
       }
     `,
     fragmentShader: `
       varying float vFade;
-
       void main() {
         vec2 uv = gl_PointCoord - vec2(0.5);
         float d = length(uv);
         float alpha = smoothstep(0.5, 0.0, d) * vFade;
-
         gl_FragColor = vec4(0.82, 0.94, 1.0, alpha * 0.7);
       }
     `
@@ -246,7 +269,6 @@ function createBackgroundParticles(count = 180) {
   const points = new THREE.Points(geometry, material);
   points.userData.material = material;
   scene.add(points);
-
   return points;
 }
 
@@ -259,179 +281,40 @@ function createProjectionBase() {
 
   baseDisc = new THREE.Mesh(
     new THREE.CylinderGeometry(0.62, 0.62, 0.018, 96, 1, true),
-    new THREE.MeshBasicMaterial({
-      color: 0xffffff,
-      transparent: true,
-      opacity: 0.12,
-      depthWrite: false
-    })
+    new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.12, depthWrite: false })
   );
 
   baseCone = new THREE.Mesh(
     new THREE.ConeGeometry(0.36, 0.82, 64, 1, true),
-    new THREE.MeshBasicMaterial({
-      color: 0xeaf8ff,
-      transparent: true,
-      opacity: 0.05,
-      depthWrite: false,
-      side: THREE.DoubleSide
-    })
+    new THREE.MeshBasicMaterial({ color: 0xeaf8ff, transparent: true, opacity: 0.05, depthWrite: false, side: THREE.DoubleSide })
   );
 
   baseCone.position.y = 0.40;
-
   group.add(baseDisc, baseCone);
 }
 
 createProjectionBase();
 
-function setMicUi() {
-  micButton.classList.toggle('recording', state.recording);
-  micButton.classList.toggle('busy', state.busy);
-  micButton.disabled = state.busy && !state.recording;
-  micButton.setAttribute('aria-label', state.recording ? '録音停止' : 'マイク開始');
-}
-
 function getRecorderMimeType() {
-  const candidates = [
-    'audio/webm;codecs=opus',
-    'audio/webm',
-    'audio/mp4'
-  ];
-
+  const candidates = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4'];
   return candidates.find((type) => window.MediaRecorder?.isTypeSupported?.(type)) || '';
-}
-
-async function startRecording() {
-  state.pendingAudio = null;
-  await stopCurrentTtsSource();
-
-  if (!API_URL || API_URL.includes('YOUR_API_ID')) {
-    setSubtitle('public/config.js の API_URL に API Gateway の /talk URL を設定してください。');
-    return;
-  }
-
-  if (!window.isSecureContext) {
-    throw new Error('HTTPSまたはlocalhostで開いてください。');
-  }
-
-  if (!navigator.mediaDevices?.getUserMedia) {
-    throw new Error('このブラウザではマイク機能が使えません。SafariまたはChromeで直接開いてください。');
-  }
-
-  const stream = await navigator.mediaDevices.getUserMedia({
-    audio: {
-      echoCancellation: true,
-      noiseSuppression: true,
-      autoGainControl: true
-    },
-    video: false
-  });
-
-  const mimeType = getRecorderMimeType();
-  const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
-
-  state.chunks = [];
-
-  recorder.ondataavailable = (event) => {
-    if (event.data && event.data.size > 0) {
-      state.chunks.push(event.data);
-    }
-  };
-
-  recorder.onstop = async () => {
-    stream.getTracks().forEach((track) => track.stop());
-
-    const blob = new Blob(state.chunks, {
-      type: recorder.mimeType || 'audio/webm'
-    });
-
-    await sendAudio(blob);
-  };
-
-  state.mediaRecorder = recorder;
-  state.recording = true;
-  state.busy = false;
-
-  setMicUi();
-  setStatus('recording');
-  setSubtitle('録音中です。もう一度マイクボタンを押すと送信します。');
-  setTranscript('');
-
-  recorder.start();
-
-  // Lambda同期payload制限を避けるため、MVPでは録音を短めに制限。
-  window.setTimeout(() => {
-    if (state.recording) {
-      stopRecording();
-    }
-  }, 18000);
-}
-
-function stopRecording() {
-  if (!state.mediaRecorder || state.mediaRecorder.state === 'inactive') return;
-
-  state.recording = false;
-  state.busy = true;
-
-  setMicUi();
-  setStatus('thinking');
-  setSubtitle('音声を解析しています…');
-
-  state.mediaRecorder.stop();
-}
-
-function blobToBase64(blob) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-
-    reader.onload = () => {
-      const result = String(reader.result || '');
-      resolve(result.includes(',') ? result.split(',')[1] : result);
-    };
-
-    reader.onerror = reject;
-    reader.readAsDataURL(blob);
-  });
-}
-
-function getAudioContext() {
-  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-
-  if (!AudioContextClass) {
-    throw new Error('このブラウザではAudioContextが使えません。');
-  }
-
-  if (!state.audioContext) {
-    state.audioContext = new AudioContextClass();
-  }
-
-  return state.audioContext;
 }
 
 async function unlockAudioForMobile() {
   try {
-    const context = getAudioContext();
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextClass) return false;
 
-    if (context.state === 'suspended') {
-      await context.resume();
-    }
+    if (!state.audioContext) state.audioContext = new AudioContextClass();
+    if (state.audioContext.state === 'suspended') await state.audioContext.resume();
 
-    // iOS/Safari対策。
-    // ユーザー操作中に無音を一瞬だけ再生して、以後のWeb Audio再生を許可させます。
-    const buffer = context.createBuffer(1, 1, 22050);
-    const source = context.createBufferSource();
+    const buffer = state.audioContext.createBuffer(1, 1, 22050);
+    const source = state.audioContext.createBufferSource();
     source.buffer = buffer;
-    source.connect(context.destination);
+    source.connect(state.audioContext.destination);
     source.start(0);
 
     state.audioUnlocked = true;
-
-    console.log('[audio unlock]', {
-      audioContextState: context.state,
-      audioUnlocked: state.audioUnlocked
-    });
-
     return true;
   } catch (error) {
     console.warn('[audio unlock failed]', error);
@@ -442,42 +325,28 @@ async function unlockAudioForMobile() {
 function base64ToArrayBuffer(base64) {
   const binary = window.atob(base64);
   const bytes = new Uint8Array(binary.length);
-
-  for (let i = 0; i < binary.length; i += 1) {
-    bytes[i] = binary.charCodeAt(i);
-  }
-
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
   return bytes.buffer;
 }
 
-async function stopCurrentTtsSource() {
-  if (!state.currentSource) return;
-
-  try {
-    state.currentSource.stop();
-  } catch (_) {
-    // すでに停止済みの場合は無視
-  }
-
-  state.currentSource = null;
-}
-
 async function playTtsWithAudioContext(audioBase64, mime, text) {
-  const context = getAudioContext();
+  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextClass) throw new Error('このブラウザではAudioContextが使えません。');
 
-  if (context.state === 'suspended') {
-    await context.resume();
-  }
+  if (!state.audioContext) state.audioContext = new AudioContextClass();
+  if (state.audioContext.state === 'suspended') await state.audioContext.resume();
 
   const arrayBuffer = base64ToArrayBuffer(audioBase64);
-  const audioBuffer = await context.decodeAudioData(arrayBuffer.slice(0));
+  const audioBuffer = await state.audioContext.decodeAudioData(arrayBuffer.slice(0));
 
-  await stopCurrentTtsSource();
+  if (state.currentSource) {
+    try { state.currentSource.stop(); } catch (_) {}
+    state.currentSource = null;
+  }
 
-  const source = context.createBufferSource();
+  const source = state.audioContext.createBufferSource();
   source.buffer = audioBuffer;
-  source.connect(context.destination);
-
+  source.connect(state.audioContext.destination);
   state.currentSource = source;
   state.talking = true;
 
@@ -485,102 +354,14 @@ async function playTtsWithAudioContext(audioBase64, mime, text) {
   startCaption(text, Math.max(2200, audioBuffer.duration * 1000));
 
   source.onended = () => {
-    if (state.currentSource === source) {
-      state.currentSource = null;
-    }
-
+    if (state.currentSource === source) state.currentSource = null;
     state.talking = false;
     state.talkLevel = 0;
-
     setStatus('standby');
     setSubtitle(text);
   };
 
   source.start(0);
-}
-
-async function playPendingAudioIfExists() {
-  if (!state.pendingAudio) return;
-
-  const pending = state.pendingAudio;
-  state.pendingAudio = null;
-
-  try {
-    await unlockAudioForMobile();
-    await playTtsWithAudioContext(
-      pending.audioBase64,
-      pending.mime,
-      pending.text
-    );
-  } catch (error) {
-    console.error('[pending audio playback failed]', error);
-    state.pendingAudio = pending;
-    setSubtitle(`音声再生に失敗しました。もう一度画面をタップしてください。
-${error.message}`);
-  }
-}
-
-async function sendAudio(blob) {
-  try {
-    const audioBase64 = await blobToBase64(blob);
-
-    const response = await fetch(API_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        session_id: state.sessionId,
-        audio_base64: audioBase64,
-        audio_mime_type: blob.type || 'audio/webm'
-      })
-    });
-
-    const data = await response.json().catch(() => ({}));
-
-    if (!response.ok) {
-      throw new Error(data.detail || data.error || `API error: ${response.status}`);
-    }
-
-    setTranscript(data.transcript || '');
-    await speakResponse(data);
-  } catch (error) {
-    console.error(error);
-    setSubtitle(`エラー: ${error.message}`);
-    setStatus('error');
-  } finally {
-    state.busy = false;
-    setMicUi();
-  }
-}
-
-function startCaption(text, durationMs = 3000) {
-  state.captionText = String(text || '');
-  state.captionIndex = 0;
-  state.captionTimer = 0;
-
-  setSubtitle('');
-
-  state.captionInterval = Math.max(
-    18,
-    durationMs / Math.max(state.captionText.length, 1)
-  );
-}
-
-function updateCaption(deltaMs) {
-  if (!state.captionText) return;
-  if (state.captionIndex >= state.captionText.length) return;
-
-  state.captionTimer += deltaMs;
-
-  while (
-    state.captionTimer >= state.captionInterval &&
-    state.captionIndex < state.captionText.length
-  ) {
-    state.captionTimer -= state.captionInterval;
-    state.captionIndex += 1;
-    setSubtitle(state.captionText.slice(0, state.captionIndex));
-  }
 }
 
 async function speakResponse(data) {
@@ -597,63 +378,342 @@ async function speakResponse(data) {
     await playTtsWithAudioContext(audioBase64, mime, text);
   } catch (error) {
     console.error('[tts playback failed]', error);
-
-    // スマホブラウザで再生が拒否された場合、次のタップで再生できるように保持します。
-    state.pendingAudio = {
-      audioBase64,
-      mime,
-      text
-    };
-
-    state.talking = false;
-    state.talkLevel = 0;
+    state.pendingAudio = { audioBase64, mime, text };
     setStatus('standby');
-    setSubtitle(
-      `${text}
-
-スマホブラウザに音声再生がブロックされました。画面を一度タップすると再生します。`
-    );
+    setSubtitle(`${text}\n\n音声再生がブロックされました。画面を一度タップすると再生します。`);
   }
 }
 
-micButton.addEventListener('click', async () => {
+stage.addEventListener('pointerdown', async () => {
+  if (!state.pendingAudio) return;
   try {
-    // スマホの自動再生制限対策。
-    // ユーザー操作中にAudioContextを解放しておくことで、API応答後のTTS再生失敗を減らします。
     await unlockAudioForMobile();
+    const pending = state.pendingAudio;
+    state.pendingAudio = null;
+    await playTtsWithAudioContext(pending.audioBase64, pending.mime, pending.text);
+  } catch (error) {
+    console.error('[pending audio playback failed]', error);
+    setSubtitle(`音声再生に失敗しました: ${error.message}`);
+  }
+});
 
-    if (state.recording) {
-      stopRecording();
-    } else {
-      await startRecording();
-    }
+function blobToBase64(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = String(reader.result || '');
+      resolve(result.includes(',') ? result.split(',')[1] : result);
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
+
+async function sendJson(payload) {
+  if (!API_URL || API_URL.includes('YOUR_API_ID')) {
+    throw new Error('public/config.js の API_URL に API Gateway の /talk URL を設定してください。');
+  }
+
+  const response = await fetch(API_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.detail || data.error || `API error: ${response.status}`);
+  return data;
+}
+
+async function sendAudio(blob) {
+  try {
+    state.busy = true;
+    setStatus('thinking');
+    setSubtitle('音声を解析しています…');
+
+    const audioBase64 = await blobToBase64(blob);
+    const data = await sendJson({
+      session_id: state.sessionId,
+      event_type: 'audio',
+      audio_base64: audioBase64,
+      audio_mime_type: blob.type || 'audio/webm'
+    });
+
+    setTranscript(data.transcript || '');
+    await speakResponse(data);
   } catch (error) {
     console.error(error);
-
-    state.recording = false;
-    state.busy = false;
-
-    setMicUi();
+    setSubtitle(`エラー: ${error.message}`);
     setStatus('error');
-    setSubtitle(`マイクを開始できません: ${error.message}`);
+  } finally {
+    state.busy = false;
   }
-});
+}
 
-// iOS/SafariなどでAPI応答後の音声再生がブロックされた場合の救済。
-// 画面を一度タップすると、保持していたTTS音声を再生します。
-stage.addEventListener('pointerdown', async () => {
-  await playPendingAudioIfExists();
-});
+async function greetPerson() {
+  const now = Date.now();
+  if (state.busy || state.talking || state.recording) return;
+  if (now - state.lastGreetingAt < LIVE_CONFIG.greetingCooldownMs) return;
 
-document.addEventListener('visibilitychange', async () => {
-  if (document.visibilityState === 'visible' && state.audioContext?.state === 'suspended') {
+  state.lastGreetingAt = now;
+  state.busy = true;
+  setStatus('greeting');
+  setSubtitle('いらっしゃいませ。');
+
+  try {
+    const data = await sendJson({
+      session_id: state.sessionId,
+      event_type: 'person_detected'
+    });
+    setTranscript('');
+    await speakResponse(data);
+  } catch (error) {
+    console.error(error);
+    setSubtitle(`挨拶生成エラー: ${error.message}`);
+    setStatus('error');
+  } finally {
+    state.busy = false;
+  }
+}
+
+function startCaption(text, durationMs = 3000) {
+  state.captionText = String(text || '');
+  state.captionIndex = 0;
+  state.captionTimer = 0;
+  setSubtitle('');
+  state.captionInterval = Math.max(18, durationMs / Math.max(state.captionText.length, 1));
+}
+
+function updateCaption(deltaMs) {
+  if (!state.captionText || state.captionIndex >= state.captionText.length) return;
+  state.captionTimer += deltaMs;
+  while (state.captionTimer >= state.captionInterval && state.captionIndex < state.captionText.length) {
+    state.captionTimer -= state.captionInterval;
+    state.captionIndex += 1;
+    setSubtitle(state.captionText.slice(0, state.captionIndex));
+  }
+}
+
+function setupMicAnalyser(stream) {
+  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextClass) return;
+  if (!state.audioContext) state.audioContext = new AudioContextClass();
+
+  const source = state.audioContext.createMediaStreamSource(stream);
+  const analyser = state.audioContext.createAnalyser();
+  analyser.fftSize = 1024;
+  source.connect(analyser);
+
+  state.analyser = analyser;
+  state.micData = new Float32Array(analyser.fftSize);
+}
+
+function getMicRms() {
+  if (!state.analyser || !state.micData) return 0;
+  state.analyser.getFloatTimeDomainData(state.micData);
+  let sum = 0;
+  for (let i = 0; i < state.micData.length; i += 1) {
+    const v = state.micData[i];
+    sum += v * v;
+  }
+  return Math.sqrt(sum / state.micData.length);
+}
+
+function startSegmentRecording() {
+  if (state.recording || state.busy || state.talking || !state.micStream) return;
+
+  const mimeType = getRecorderMimeType();
+  const recorder = new MediaRecorder(state.micStream, mimeType ? { mimeType } : undefined);
+  state.chunks = [];
+
+  recorder.ondataavailable = (event) => {
+    if (event.data && event.data.size > 0) state.chunks.push(event.data);
+  };
+
+  recorder.onstop = async () => {
+    const blob = new Blob(state.chunks, { type: recorder.mimeType || 'audio/webm' });
+    state.recording = false;
+
+    if (blob.size < 1200) {
+      setStatus('standby');
+      return;
+    }
+
+    await sendAudio(blob);
+  };
+
+  state.mediaRecorder = recorder;
+  state.recording = true;
+  state.speechStartedAt = Date.now();
+  state.lastVoiceAt = Date.now();
+
+  setStatus('listening');
+  setSubtitle('お話しください。');
+  recorder.start();
+}
+
+function stopSegmentRecording() {
+  if (!state.mediaRecorder || state.mediaRecorder.state === 'inactive') return;
+  state.mediaRecorder.stop();
+  setStatus('thinking');
+}
+
+async function setupFaceDetector() {
+  if ('FaceDetector' in window) {
     try {
-      await state.audioContext.resume();
-    } catch (_) {
-      // resumeできない場合は次回タップで解除する
+      state.faceDetector = new window.FaceDetector({ fastMode: true, maxDetectedFaces: 2 });
+      state.faceDetectorAvailable = true;
+      return;
+    } catch (error) {
+      console.warn('[FaceDetector unavailable]', error);
     }
   }
-});
+  state.faceDetectorAvailable = false;
+}
+
+function frameDifferencePresence() {
+  const ctx = visionCanvas.getContext('2d', { willReadFrequently: true });
+  const w = visionCanvas.width;
+  const h = visionCanvas.height;
+  ctx.drawImage(cameraVideo, 0, 0, w, h);
+  const frame = ctx.getImageData(0, 0, w, h);
+  const data = frame.data;
+
+  if (!state.backgroundFrame) {
+    state.backgroundFrame = new Uint8ClampedArray(data);
+    return false;
+  }
+
+  let diffPixels = 0;
+  const total = w * h;
+  for (let i = 0; i < data.length; i += 16) {
+    const d = Math.abs(data[i] - state.backgroundFrame[i]) +
+      Math.abs(data[i + 1] - state.backgroundFrame[i + 1]) +
+      Math.abs(data[i + 2] - state.backgroundFrame[i + 2]);
+    if (d > 70) diffPixels += 4;
+
+    // 人がいない時だけ背景を少しずつ更新する。人がいる時に背景化しないよう控えめ。
+    if (!state.presence) {
+      state.backgroundFrame[i] = Math.round(state.backgroundFrame[i] * 0.97 + data[i] * 0.03);
+      state.backgroundFrame[i + 1] = Math.round(state.backgroundFrame[i + 1] * 0.97 + data[i + 1] * 0.03);
+      state.backgroundFrame[i + 2] = Math.round(state.backgroundFrame[i + 2] * 0.97 + data[i + 2] * 0.03);
+    }
+  }
+
+  return diffPixels / total > 0.045;
+}
+
+async function detectPresence() {
+  if (!cameraVideo.videoWidth || !cameraVideo.videoHeight) return false;
+
+  if (state.faceDetectorAvailable && state.faceDetector) {
+    try {
+      const faces = await state.faceDetector.detect(cameraVideo);
+      if (faces && faces.length > 0) return true;
+    } catch (error) {
+      state.faceDetectorAvailable = false;
+      console.warn('[FaceDetector failed, fallback to motion]', error);
+    }
+  }
+
+  return frameDifferencePresence();
+}
+
+async function updatePresence() {
+  const now = performance.now();
+  if (now - state.lastVisionCheckAt < 700) return;
+  state.lastVisionCheckAt = now;
+
+  const detected = await detectPresence();
+  if (detected) {
+    state.presenceHits += 1;
+    state.presenceLost = 0;
+  } else {
+    state.presenceLost += 1;
+    state.presenceHits = 0;
+  }
+
+  if (!state.presence && state.presenceHits >= LIVE_CONFIG.presenceHitFrames) {
+    state.presence = true;
+    setPresenceStatus('person detected');
+    greetPerson();
+  }
+
+  if (state.presence && state.presenceLost >= LIVE_CONFIG.presenceLostFrames) {
+    state.presence = false;
+    setPresenceStatus('no person');
+  }
+}
+
+function updateVAD() {
+  if (!state.liveStarted || !state.presence || !LIVE_CONFIG.enableAutoListen) return;
+  if (state.busy || state.talking) return;
+
+  const rms = getMicRms();
+  const now = Date.now();
+
+  if (!state.recording && rms > LIVE_CONFIG.vadStartThreshold) {
+    startSegmentRecording();
+    return;
+  }
+
+  if (state.recording) {
+    if (rms > LIVE_CONFIG.vadStopThreshold) state.lastVoiceAt = now;
+
+    const tooLong = now - state.speechStartedAt > LIVE_CONFIG.maxSpeechMs;
+    const silenceLong = now - state.lastVoiceAt > LIVE_CONFIG.silenceStopMs;
+
+    if (tooLong || silenceLong) stopSegmentRecording();
+  }
+}
+
+async function startLiveMode() {
+  try {
+    if (!window.isSecureContext) {
+      throw new Error('HTTPSまたはlocalhostで開いてください。');
+    }
+
+    await unlockAudioForMobile();
+
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: {
+        facingMode: 'user',
+        width: { ideal: 640 },
+        height: { ideal: 480 }
+      },
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true
+      }
+    });
+
+    const videoTracks = stream.getVideoTracks();
+    const audioTracks = stream.getAudioTracks();
+    state.videoStream = new MediaStream(videoTracks);
+    state.micStream = new MediaStream(audioTracks);
+
+    cameraVideo.srcObject = state.videoStream;
+    cameraVideo.muted = true;
+    cameraVideo.playsInline = true;
+    await cameraVideo.play();
+
+    setupMicAnalyser(state.micStream);
+    await setupFaceDetector();
+
+    state.liveStarted = true;
+    permissionOverlay.classList.add('hidden');
+    setStatus('watching');
+    setPresenceStatus('watching');
+    setSubtitle('人を検知すると自動で話しかけます。');
+  } catch (error) {
+    console.error('[start live failed]', error);
+    setStatus('error');
+    setSubtitle(`カメラまたはマイクを開始できません: ${error.message}`);
+  }
+}
+
+startButton.addEventListener('click', startLiveMode);
 
 function animate() {
   const delta = clock.getDelta();
@@ -661,6 +721,8 @@ function animate() {
 
   particles.userData.material.uniforms.uTime.value = elapsed;
   updateCaption(delta * 1000);
+  updatePresence();
+  updateVAD();
 
   const targetTalk = state.talking ? 1 : 0;
   state.talkLevel += (targetTalk - state.talkLevel) * Math.min(1, delta * 4.5);
@@ -671,26 +733,18 @@ function animate() {
       AVATAR_VIEW.y + Math.sin(elapsed * 0.72) * AVATAR_VIEW.floatAmount,
       AVATAR_VIEW.z
     );
-
     avatarGroup.rotation.y =
       THREE.MathUtils.degToRad(AVATAR_VIEW.yawDeg) +
       Math.sin(elapsed * 0.18) * THREE.MathUtils.degToRad(AVATAR_VIEW.idleYawDeg);
   }
 
   for (const mat of avatarMaterials) {
-    mat.opacity =
-      0.56 +
-      state.talkLevel * 0.12 +
-      Math.sin(elapsed * 5.5) * state.talkLevel * 0.02;
-
+    mat.opacity = 0.56 + state.talkLevel * 0.12 + Math.sin(elapsed * 5.5) * state.talkLevel * 0.02;
     mat.emissiveIntensity = 0.016 + state.talkLevel * 0.065;
   }
 
   if (baseDisc && baseCone) {
-    baseDisc.scale.setScalar(
-      1 + Math.sin(elapsed * 1.7) * 0.035 + state.talkLevel * 0.08
-    );
-
+    baseDisc.scale.setScalar(1 + Math.sin(elapsed * 1.7) * 0.035 + state.talkLevel * 0.08);
     baseCone.material.opacity = 0.045 + state.talkLevel * 0.065;
   }
 
@@ -698,13 +752,11 @@ function animate() {
   requestAnimationFrame(animate);
 }
 
-setMicUi();
 setStatus('loading');
-
+setPresenceStatus('camera standby');
 loadAvatar().catch((error) => {
   console.error(error);
   setStatus('error');
   setSubtitle(`GLB読み込み失敗: ${error.message}`);
 });
-
 animate();
