@@ -1,31 +1,122 @@
 :root {
-  color-scheme: dark;
-  --bg: #020912;
-  --panel: rgba(4, 17, 28, 0.76);
-  --line: rgba(135, 220, 245, 0.35);
-  --text: #f3fbff;
-  --sub: #a6c7d7;
+  --bg: #020812;
+  --panel: rgba(6, 18, 30, 0.78);
+  --line: rgba(176, 238, 255, 0.35);
+  --text: #edf8ff;
+  --muted: rgba(237, 248, 255, 0.72);
 }
+
 * { box-sizing: border-box; }
-html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: var(--bg); color: var(--text); font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-.stage { position: relative; width: 100vw; height: 100vh; overflow: hidden; background:
-  linear-gradient(rgba(120,200,230,.035) 1px, transparent 1px),
-  linear-gradient(90deg, rgba(120,200,230,.035) 1px, transparent 1px),
-  radial-gradient(circle at 50% 46%, rgba(80,150,180,.18), rgba(0,0,0,0) 48%), #020912;
-  background-size: 18px 18px, 18px 18px, cover; }
+html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+body {
+  background:
+    radial-gradient(circle at 50% 45%, rgba(86, 180, 210, .14), transparent 34%),
+    linear-gradient(180deg, #06111d 0%, #020812 70%, #01050b 100%);
+  color: var(--text);
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(rgba(255,255,255,.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,.03) 1px, transparent 1px);
+  background-size: 18px 18px;
+  mask-image: radial-gradient(circle at 50% 45%, black 0%, transparent 78%);
+}
+
+.app-shell { position: relative; width: 100vw; height: 100dvh; overflow: hidden; }
+.stage { position: absolute; inset: 0; }
 .stage canvas { display: block; width: 100%; height: 100%; }
-.camera-video, .vision-canvas { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; left: -10px; top: -10px; }
-.caption-box { position: absolute; left: 50%; bottom: max(20px, env(safe-area-inset-bottom)); transform: translateX(-50%); width: min(980px, calc(100vw - 36px)); min-height: 112px; padding: 22px 26px; border: 1px solid var(--line); border-radius: 18px; background: linear-gradient(120deg, rgba(4,20,32,.86), rgba(13,30,43,.64)); box-shadow: 0 0 40px rgba(80,190,220,.08), inset 0 0 24px rgba(150,230,255,.04); backdrop-filter: blur(8px); }
-.eyebrow { margin: 0 0 8px; color: #9eefff; letter-spacing: .28em; font-size: 11px; }
-.subtitle { margin: 0; white-space: pre-wrap; font-size: clamp(20px, 2.6vw, 30px); line-height: 1.48; }
-.transcript { margin: 10px 0 0; color: var(--sub); font-size: 13px; min-height: 18px; }
-.status-panel { position: absolute; left: 18px; top: 16px; display: flex; gap: 14px; padding: 10px 14px; color: var(--sub); font-size: 12px; border: 1px solid rgba(130,220,245,.16); border-radius: 999px; background: rgba(0,0,0,.25); backdrop-filter: blur(6px); }
-.status-panel strong { color: #dffbff; font-weight: 600; }
-.permission-overlay { position: absolute; inset: 0; display: grid; place-items: center; z-index: 20; background: rgba(0, 5, 10, .62); backdrop-filter: blur(10px); }
-.permission-overlay.hidden { display: none; }
-.permission-card { width: min(560px, calc(100vw - 36px)); padding: 30px; border: 1px solid var(--line); border-radius: 22px; background: rgba(5, 18, 30, .88); box-shadow: 0 0 60px rgba(80,190,220,.14); }
-.permission-card h1 { margin: 0 0 12px; font-size: 28px; }
-.permission-card p { color: var(--sub); line-height: 1.7; }
-.permission-card button { width: 100%; margin: 18px 0 8px; padding: 16px 18px; border: 0; border-radius: 14px; color: #001018; background: #f5fbff; font-weight: 700; font-size: 16px; cursor: pointer; }
-.permission-card button:disabled { opacity: .55; cursor: wait; }
-.note { font-size: 12px; }
+
+.hud {
+  position: absolute;
+  left: max(20px, env(safe-area-inset-left));
+  right: max(20px, env(safe-area-inset-right));
+  bottom: max(18px, env(safe-area-inset-bottom));
+  max-width: 980px;
+  margin: 0 auto;
+  padding: 18px 22px 20px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: linear-gradient(180deg, rgba(6, 20, 34, 0.86), rgba(4, 12, 22, 0.78));
+  box-shadow: 0 20px 60px rgba(0, 0, 0, .32), inset 0 0 45px rgba(180, 235, 255, .06);
+  backdrop-filter: blur(10px);
+}
+.hud-kicker {
+  font-size: 11px;
+  letter-spacing: .34em;
+  color: rgba(209, 247, 255, .82);
+  margin-bottom: 10px;
+}
+.subtitle {
+  min-height: 42px;
+  font-size: clamp(17px, 2.1vw, 27px);
+  line-height: 1.62;
+  white-space: pre-wrap;
+  text-shadow: 0 0 16px rgba(216, 248, 255, .24);
+}
+.transcript {
+  min-height: 18px;
+  margin-top: 8px;
+  color: rgba(215, 239, 247, .68);
+  font-size: 13px;
+}
+.status {
+  position: absolute;
+  right: 18px;
+  top: 14px;
+  font-size: 11px;
+  letter-spacing: .13em;
+  color: rgba(190, 246, 255, .76);
+}
+
+.start-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: radial-gradient(circle at 50% 44%, rgba(28, 78, 108, .24), rgba(1, 7, 13, .88) 62%);
+}
+.start-overlay.hidden { display: none; }
+.start-panel {
+  width: min(560px, 92vw);
+  padding: 30px;
+  border: 1px solid rgba(182, 240, 255, .34);
+  border-radius: 24px;
+  background: rgba(6, 18, 30, .86);
+  box-shadow: 0 30px 90px rgba(0,0,0,.45), inset 0 0 50px rgba(176,238,255,.06);
+}
+.start-kicker {
+  color: rgba(203, 246, 255, .76);
+  letter-spacing: .33em;
+  font-size: 11px;
+  margin-bottom: 10px;
+}
+.start-panel h1 { margin: 0 0 12px; font-size: 28px; }
+.start-panel p { color: var(--muted); line-height: 1.75; margin: 0 0 18px; }
+.start-panel button {
+  width: 100%;
+  appearance: none;
+  border: 1px solid rgba(220, 250, 255, .7);
+  background: #f2fbff;
+  color: #08121d;
+  border-radius: 16px;
+  padding: 16px 18px;
+  font-weight: 700;
+  font-size: 16px;
+}
+.start-panel button:disabled { opacity: .58; }
+.start-note { font-size: 12px; margin-top: 14px !important; }
+.camera-video, .camera-probe { display: none; }
+
+@media (max-width: 640px) {
+  .hud { left: 12px; right: 12px; bottom: 12px; padding: 14px 16px 16px; }
+  .subtitle { min-height: 64px; font-size: 17px; }
+  .status { position: static; margin-top: 6px; }
+}

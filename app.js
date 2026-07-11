@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
 const CONFIG = window.HOLOGRAM_CONFIG || {};
-const SESSION_URL = CONFIG.SESSION_URL || CONFIG.REALTIME_SESSION_URL || CONFIG.API_URL || '';
+const API_URL = CONFIG.API_URL || '';
 const MODEL_URL = CONFIG.MODEL_URL || 'https://watchimg.s3.ap-northeast-1.amazonaws.com/glb/avatar-v1.glb';
 
 const AVATAR_VIEW = {
@@ -16,80 +16,64 @@ const AVATAR_VIEW = {
   floatAmount: 0.026
 };
 
-const LIVE_CONFIG = {
-  greetingCooldownMs: 90_000,
-  visionIntervalMs: 650,
-  presenceHitFrames: 2,
-  presenceLostFrames: 8,
-  fallbackPresenceAfterMs: 2200
+const VAD = {
+  startThreshold: 0.040,
+  stopThreshold: 0.022,
+  silenceMs: 1050,
+  minRecordMs: 450,
+  maxRecordMs: 9000
+};
+
+const PERSON = {
+  checkIntervalMs: 420,
+  stableMs: 900,
+  absentResetMs: 8000,
+  greetCooldownMs: 60000
 };
 
 const stage = document.getElementById('stage');
-const cameraVideo = document.getElementById('cameraVideo');
-const visionCanvas = document.getElementById('visionCanvas');
+const startOverlay = document.getElementById('startOverlay');
 const startButton = document.getElementById('startButton');
-const permissionOverlay = document.getElementById('permissionOverlay');
 const statusEl = document.getElementById('status');
-const presenceStatusEl = document.getElementById('presenceStatus');
 const subtitleEl = document.getElementById('subtitle');
 const transcriptEl = document.getElementById('transcript');
-
-if (!stage) throw new Error('HTMLに #stage がありません。public/index.html も最新版に差し替えてください。');
+const videoEl = document.getElementById('cameraVideo');
+const probeCanvas = document.getElementById('cameraProbe');
+const probeCtx = probeCanvas.getContext('2d', { willReadFrequently: true });
 
 const state = {
-  started: false,
-  connecting: false,
+  liveStarted: false,
+  mediaReady: false,
+  videoStream: null,
+  micStream: null,
+  recorder: null,
+  chunks: [],
+  recording: false,
+  busy: false,
   talking: false,
   talkLevel: 0,
   captionText: '',
   captionIndex: 0,
   captionTimer: 0,
-  captionInterval: 26,
-  sessionId: crypto.randomUUID?.() || String(Date.now()),
-
-  pc: null,
-  dc: null,
-  micStream: null,
-  cameraStream: null,
-  remoteAudio: null,
-
+  captionInterval: 30,
+  audioContext: null,
+  audioUnlocked: false,
+  audioSource: null,
+  analyser: null,
+  analyserData: null,
+  rms: 0,
+  lastVoiceAt: 0,
+  recordStartedAt: 0,
+  personPresent: false,
+  personStableSince: 0,
+  lastPersonSeenAt: 0,
+  lastGreetingAt: 0,
+  greetedThisPresence: false,
+  lastProbeAt: 0,
+  previousFrame: null,
   faceDetector: null,
-  faceDetectorAvailable: false,
-  lastVisionCheckAt: 0,
-  visionStartedAt: 0,
-  presence: false,
-  presenceHits: 0,
-  presenceLost: 0,
-  lastGreetingAt: 0
+  sessionId: crypto.randomUUID?.() || String(Date.now())
 };
-
-
-function hidePermissionOverlay() {
-  if (permissionOverlay) permissionOverlay.classList.add('hidden');
-}
-
-function showPermissionOverlay() {
-  if (permissionOverlay) permissionOverlay.classList.remove('hidden');
-}
-
-function setStartButtonState({ disabled = false, text = '' } = {}) {
-  if (!startButton) return;
-  startButton.disabled = disabled;
-  if (text) startButton.textContent = text;
-}
-
-function timeoutPromise(promise, ms, label) {
-  let timer = null;
-  const timeout = new Promise((_, reject) => {
-    timer = window.setTimeout(() => {
-      reject(new Error(`${label} が ${Math.round(ms / 1000)}秒以内に完了しませんでした。API Gateway / Lambda / OpenAI Realtime接続を確認してください。`));
-    }, ms);
-  });
-
-  return Promise.race([promise, timeout]).finally(() => {
-    if (timer) window.clearTimeout(timer);
-  });
-}
 
 const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -125,39 +109,9 @@ const rim = new THREE.DirectionalLight(0xd7f6ff, 1.5);
 rim.position.set(0, 1.3, -2.2);
 scene.add(rim);
 
-function setStatus(text) {
-  if (statusEl) statusEl.textContent = text;
-}
-
-function setPresenceStatus(text) {
-  if (presenceStatusEl) presenceStatusEl.textContent = text;
-}
-
-function setSubtitle(text) {
-  if (subtitleEl) subtitleEl.textContent = text;
-}
-
-function setTranscript(text) {
-  if (transcriptEl) transcriptEl.textContent = text ? `認識: ${text}` : '';
-}
-
-function startCaption(text, durationMs = 3000) {
-  state.captionText = String(text || '');
-  state.captionIndex = 0;
-  state.captionTimer = 0;
-  state.captionInterval = Math.max(16, durationMs / Math.max(state.captionText.length, 1));
-  setSubtitle('');
-}
-
-function updateCaption(deltaMs) {
-  if (!state.captionText || state.captionIndex >= state.captionText.length) return;
-  state.captionTimer += deltaMs;
-  while (state.captionTimer >= state.captionInterval && state.captionIndex < state.captionText.length) {
-    state.captionTimer -= state.captionInterval;
-    state.captionIndex += 1;
-    setSubtitle(state.captionText.slice(0, state.captionIndex));
-  }
-}
+function setStatus(text) { statusEl.textContent = text; }
+function setSubtitle(text) { subtitleEl.textContent = text; }
+function setTranscript(text) { transcriptEl.textContent = text ? `認識: ${text}` : ''; }
 
 function resize() {
   const width = stage.clientWidth;
@@ -287,361 +241,340 @@ function createProjectionBase() {
 }
 createProjectionBase();
 
-async function setupFaceDetector() {
-  if ('FaceDetector' in window) {
-    try {
-      state.faceDetector = new window.FaceDetector({ fastMode: true, maxDetectedFaces: 1 });
-      state.faceDetectorAvailable = true;
-      console.log('[presence] FaceDetector enabled');
-      return;
-    } catch (error) {
-      console.warn('[presence] FaceDetector init failed', error);
-    }
-  }
-  state.faceDetectorAvailable = false;
-  console.warn('[presence] FaceDetector unavailable. Fallback presence will be used.');
-}
-
-async function detectPresence() {
-  if (!cameraVideo || !cameraVideo.videoWidth || !cameraVideo.videoHeight) return false;
-
-  if (state.faceDetectorAvailable && state.faceDetector) {
-    try {
-      const faces = await state.faceDetector.detect(cameraVideo);
-      return faces.length > 0;
-    } catch (error) {
-      console.warn('[presence] FaceDetector failed', error);
-      state.faceDetectorAvailable = false;
-    }
-  }
-
-  // Fallback: FaceDetector非対応ブラウザでは、開始後しばらくしたら「人がいる」とみなす。
-  return performance.now() - state.visionStartedAt > LIVE_CONFIG.fallbackPresenceAfterMs;
-}
-
-async function updatePresence() {
-  if (!state.started) return;
-  const now = performance.now();
-  if (now - state.lastVisionCheckAt < LIVE_CONFIG.visionIntervalMs) return;
-  state.lastVisionCheckAt = now;
-
-  const hit = await detectPresence();
-  if (hit) {
-    state.presenceHits += 1;
-    state.presenceLost = 0;
-  } else {
-    state.presenceLost += 1;
-    state.presenceHits = 0;
-  }
-
-  if (!state.presence && state.presenceHits >= LIVE_CONFIG.presenceHitFrames) {
-    state.presence = true;
-    setPresenceStatus('detected');
-    maybeSendGreeting();
-  }
-
-  if (state.presence && state.presenceLost >= LIVE_CONFIG.presenceLostFrames) {
-    state.presence = false;
-    setPresenceStatus('standby');
-  }
-}
-
-function sendRealtimeEvent(event) {
-  if (!state.dc || state.dc.readyState !== 'open') {
-    console.warn('[realtime] data channel not open', event);
-    return;
-  }
-  state.dc.send(JSON.stringify(event));
-}
-
-function sendUserText(text) {
-  sendRealtimeEvent({
-    type: 'conversation.item.create',
-    item: {
-      type: 'message',
-      role: 'user',
-      content: [{ type: 'input_text', text }]
-    }
-  });
-  sendRealtimeEvent({ type: 'response.create' });
-}
-
-function maybeSendGreeting() {
-  const now = Date.now();
-  if (now - state.lastGreetingAt < LIVE_CONFIG.greetingCooldownMs) return;
-  if (!state.dc || state.dc.readyState !== 'open') return;
-  state.lastGreetingAt = now;
-  sendUserText('お客様が視界に入りました。コミット銀座のAIコンシェルジュとして、短く上品に挨拶してください。');
-}
-
-function appendSubtitleDelta(delta) {
-  state.captionText += delta;
-  setSubtitle(state.captionText);
-}
-
-function handleRealtimeEvent(event) {
-  console.debug('[realtime event]', event);
-  const type = event.type || '';
-
-  if (type === 'error') {
-    setStatus('error');
-    setSubtitle(`Realtime API error: ${event.error?.message || JSON.stringify(event.error || event)}`);
-    return;
-  }
-
-  if (type.includes('input_audio') && type.includes('speech_started')) {
-    setStatus('listening');
-    setTranscript('聞き取り中…');
-    return;
-  }
-
-  if (type.includes('input_audio') && type.includes('speech_stopped')) {
-    setStatus('thinking');
-    return;
-  }
-
-  if (type.includes('input_audio') && type.includes('transcription') && type.includes('completed')) {
-    const text = event.transcript || event.text || event.item?.content?.[0]?.transcript || '';
-    if (text) setTranscript(text);
-    return;
-  }
-
-  // GA / preview系のイベント名差異を広めに拾う
-  if (type.includes('response') && type.includes('transcript') && type.endsWith('.delta')) {
-    const delta = event.delta || event.text || '';
-    if (delta) {
-      state.talking = true;
-      setStatus('speaking');
-      appendSubtitleDelta(delta);
-    }
-    return;
-  }
-
-  if (type.includes('response') && type.includes('output_text') && type.endsWith('.delta')) {
-    const delta = event.delta || event.text || '';
-    if (delta) appendSubtitleDelta(delta);
-    return;
-  }
-
-  if (type === 'response.created' || type === 'response.output_item.added') {
-    state.captionText = '';
-    setSubtitle('');
-    state.talking = true;
-    setStatus('speaking');
-    return;
-  }
-
-  if (type === 'response.done' || type === 'response.completed') {
-    state.talking = false;
-    setStatus('watching');
-    return;
-  }
-}
-
-async function startRealtimeSession(micStream) {
-  if (!SESSION_URL || SESSION_URL.includes('YOUR_API_ID')) {
-    throw new Error('public/config.js の SESSION_URL に API Gateway の /session URL を設定してください。');
-  }
-
-  const pc = new RTCPeerConnection();
-  state.pc = pc;
-
-  const remoteAudio = document.createElement('audio');
-  remoteAudio.autoplay = true;
-  remoteAudio.playsInline = true;
-  remoteAudio.controls = false;
-  state.remoteAudio = remoteAudio;
-
-  pc.ontrack = (event) => {
-    remoteAudio.srcObject = event.streams[0];
-    remoteAudio.play().catch((error) => {
-      console.warn('[remote audio play blocked]', error);
-      setSubtitle('音声再生がブロックされました。画面を一度タップしてください。');
-    });
-  };
-
-  for (const track of micStream.getAudioTracks()) {
-    pc.addTrack(track, micStream);
-  }
-
-  const dc = pc.createDataChannel('oai-events');
-  state.dc = dc;
-
-  dc.addEventListener('open', () => {
-    console.log('[realtime] data channel open');
-    setStatus('watching');
-    setSubtitle('人を検知すると自動で話しかけます。話しかけても会話できます。');
-    maybeSendGreeting();
-  });
-
-  dc.addEventListener('message', (message) => {
-    try {
-      handleRealtimeEvent(JSON.parse(message.data));
-    } catch (error) {
-      console.warn('[realtime] failed to parse event', message.data, error);
-    }
-  });
-
-  const offer = await pc.createOffer();
-  await pc.setLocalDescription(offer);
-
-  // ICE候補収集を少し待つ。環境により即時でも動くが、待った方が安定します。
-  await new Promise((resolve) => {
-    if (pc.iceGatheringState === 'complete') return resolve();
-    const timer = setTimeout(resolve, 1600);
-    pc.addEventListener('icegatheringstatechange', () => {
-      if (pc.iceGatheringState === 'complete') {
-        clearTimeout(timer);
-        resolve();
-      }
-    });
-  });
-
-  const sdp = pc.localDescription?.sdp;
-  if (!sdp) throw new Error('WebRTC offer SDPを作成できませんでした。');
-
-  const response = await fetch(SESSION_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/sdp' },
-    body: sdp
-  });
-
-  const answerSdp = await response.text();
-  if (!response.ok) {
-    throw new Error(answerSdp || `Realtime session API error: ${response.status}`);
-  }
-
-  await pc.setRemoteDescription({ type: 'answer', sdp: answerSdp });
-}
-
 async function unlockAudioForMobile() {
-  try {
-    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-    if (!AudioContextClass) return;
-    const ctx = new AudioContextClass();
-    if (ctx.state === 'suspended') await ctx.resume();
-    const buffer = ctx.createBuffer(1, 1, 22050);
-    const source = ctx.createBufferSource();
-    source.buffer = buffer;
-    source.connect(ctx.destination);
-    source.start(0);
-    window.setTimeout(() => ctx.close().catch(() => {}), 500);
-  } catch (error) {
-    console.warn('[audio unlock failed]', error);
+  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextClass) return false;
+  if (!state.audioContext) state.audioContext = new AudioContextClass();
+  if (state.audioContext.state === 'suspended') await state.audioContext.resume();
+  const buffer = state.audioContext.createBuffer(1, 1, 22050);
+  const source = state.audioContext.createBufferSource();
+  source.buffer = buffer;
+  source.connect(state.audioContext.destination);
+  source.start(0);
+  state.audioUnlocked = true;
+  return true;
+}
+
+function base64ToArrayBuffer(base64) {
+  const binary = window.atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  return bytes.buffer;
+}
+
+async function playTts(audioBase64, text) {
+  if (!audioBase64) {
+    setSubtitle(text);
+    return;
   }
+  await unlockAudioForMobile();
+  const arrayBuffer = base64ToArrayBuffer(audioBase64);
+  const audioBuffer = await state.audioContext.decodeAudioData(arrayBuffer.slice(0));
+  if (state.audioSource) {
+    try { state.audioSource.stop(); } catch (_) {}
+    state.audioSource = null;
+  }
+  const source = state.audioContext.createBufferSource();
+  source.buffer = audioBuffer;
+  source.connect(state.audioContext.destination);
+  state.audioSource = source;
+  state.talking = true;
+  setStatus('speaking');
+  startCaption(text, Math.max(2200, audioBuffer.duration * 1000));
+  source.onended = () => {
+    if (state.audioSource === source) state.audioSource = null;
+    state.talking = false;
+    state.talkLevel = 0;
+    setStatus('watching');
+    setSubtitle(text);
+  };
+  source.start(0);
+}
+
+function getRecorderMimeType() {
+  return ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4']
+    .find((type) => window.MediaRecorder?.isTypeSupported?.(type)) || '';
+}
+
+function setupMicAnalyser(stream) {
+  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+  if (!state.audioContext) state.audioContext = new AudioContextClass();
+  const source = state.audioContext.createMediaStreamSource(stream);
+  const analyser = state.audioContext.createAnalyser();
+  analyser.fftSize = 1024;
+  source.connect(analyser);
+  state.analyser = analyser;
+  state.analyserData = new Uint8Array(analyser.fftSize);
+}
+
+function updateRms() {
+  if (!state.analyser || !state.analyserData) return 0;
+  state.analyser.getByteTimeDomainData(state.analyserData);
+  let sum = 0;
+  for (const v of state.analyserData) {
+    const n = (v - 128) / 128;
+    sum += n * n;
+  }
+  state.rms = Math.sqrt(sum / state.analyserData.length);
+  return state.rms;
+}
+
+function startSpeechSegment() {
+  if (state.recording || state.busy || state.talking || !state.micStream) return;
+  const mimeType = getRecorderMimeType();
+  const recorder = new MediaRecorder(state.micStream, mimeType ? { mimeType } : undefined);
+  state.chunks = [];
+  recorder.ondataavailable = (event) => {
+    if (event.data && event.data.size > 0) state.chunks.push(event.data);
+  };
+  recorder.onstop = async () => {
+    const blob = new Blob(state.chunks, { type: recorder.mimeType || 'audio/webm' });
+    if (blob.size < 900) {
+      state.recording = false;
+      return;
+    }
+    state.recording = false;
+    await sendAudio(blob);
+  };
+  state.recorder = recorder;
+  state.recording = true;
+  state.recordStartedAt = performance.now();
+  state.lastVoiceAt = performance.now();
+  setStatus('listening');
+  setSubtitle('お話を聞いています…');
+  recorder.start(250);
+}
+
+function stopSpeechSegment() {
+  if (!state.recorder || !state.recording || state.recorder.state === 'inactive') return;
+  setStatus('thinking');
+  setSubtitle('少々お待ちください。');
+  state.recorder.stop();
+}
+
+function blobToBase64(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = String(reader.result || '');
+      resolve(result.includes(',') ? result.split(',')[1] : result);
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
+
+async function postToTalk(payload) {
+  if (!API_URL || API_URL.includes('YOUR_API_ID')) {
+    throw new Error('public/config.js の API_URL に API Gateway の /talk URL を設定してください。');
+  }
+  const response = await fetch(API_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session_id: state.sessionId, ...payload })
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.detail || data.error || `API error: ${response.status}`);
+  return data;
+}
+
+async function sendAudio(blob) {
+  try {
+    state.busy = true;
+    const audioBase64 = await blobToBase64(blob);
+    const data = await postToTalk({
+      event_type: 'audio',
+      audio_base64: audioBase64,
+      audio_mime_type: blob.type || 'audio/webm'
+    });
+    setTranscript(data.transcript || '');
+    await playTts(data.audio_base64, data.display_text || data.speak_text || '回答を生成しました。');
+  } catch (error) {
+    console.error(error);
+    setStatus('error');
+    setSubtitle(`エラー: ${error.message}`);
+  } finally {
+    state.busy = false;
+  }
+}
+
+async function sendPersonDetectedGreeting() {
+  if (state.busy || state.talking) return;
+  try {
+    state.busy = true;
+    setStatus('greeting');
+    const data = await postToTalk({ event_type: 'person_detected' });
+    setTranscript('');
+    await playTts(data.audio_base64, data.display_text || data.speak_text || 'いらっしゃいませ。');
+  } catch (error) {
+    console.error(error);
+    setSubtitle(`挨拶生成に失敗しました: ${error.message}`);
+    setStatus('watching');
+  } finally {
+    state.busy = false;
+  }
+}
+
+function startCaption(text, durationMs = 3000) {
+  state.captionText = String(text || '');
+  state.captionIndex = 0;
+  state.captionTimer = 0;
+  state.captionInterval = Math.max(18, durationMs / Math.max(state.captionText.length, 1));
+  setSubtitle('');
+}
+
+function updateCaption(deltaMs) {
+  if (!state.captionText || state.captionIndex >= state.captionText.length) return;
+  state.captionTimer += deltaMs;
+  while (state.captionTimer >= state.captionInterval && state.captionIndex < state.captionText.length) {
+    state.captionTimer -= state.captionInterval;
+    state.captionIndex += 1;
+    setSubtitle(state.captionText.slice(0, state.captionIndex));
+  }
+}
+
+async function detectPerson(now) {
+  if (!videoEl.videoWidth || now - state.lastProbeAt < PERSON.checkIntervalMs) return state.personPresent;
+  state.lastProbeAt = now;
+
+  let detected = false;
+  if (state.faceDetector) {
+    try {
+      const faces = await state.faceDetector.detect(videoEl);
+      detected = faces.length > 0;
+    } catch (_) {
+      state.faceDetector = null;
+    }
+  }
+
+  if (!detected) {
+    probeCtx.drawImage(videoEl, 0, 0, probeCanvas.width, probeCanvas.height);
+    const frame = probeCtx.getImageData(0, 0, probeCanvas.width, probeCanvas.height).data;
+    let avg = 0;
+    let variance = 0;
+    let motion = 0;
+    const samples = probeCanvas.width * probeCanvas.height;
+    for (let i = 0; i < frame.length; i += 4) {
+      const lum = frame[i] * 0.299 + frame[i + 1] * 0.587 + frame[i + 2] * 0.114;
+      avg += lum;
+      if (state.previousFrame) motion += Math.abs(lum - state.previousFrame[i / 4]);
+    }
+    avg /= samples;
+    const compact = new Float32Array(samples);
+    for (let i = 0; i < frame.length; i += 4) {
+      const lum = frame[i] * 0.299 + frame[i + 1] * 0.587 + frame[i + 2] * 0.114;
+      compact[i / 4] = lum;
+      variance += Math.pow(lum - avg, 2);
+    }
+    variance = Math.sqrt(variance / samples);
+    motion = state.previousFrame ? motion / samples : 0;
+    state.previousFrame = compact;
+
+    // FaceDetector非対応環境用の簡易検知。人専用ではなく「被写体がある」検知です。
+    detected = avg > 22 && (variance > 20 || motion > 4.2);
+  }
+
+  if (detected) {
+    if (!state.personPresent) state.personStableSince = now;
+    state.personPresent = true;
+    state.lastPersonSeenAt = now;
+  } else if (state.personPresent && now - state.lastPersonSeenAt > PERSON.absentResetMs) {
+    state.personPresent = false;
+    state.greetedThisPresence = false;
+  }
+
+  return state.personPresent;
 }
 
 async function startLiveMode() {
-  if (state.connecting || state.started) return;
-
-  state.connecting = true;
-  setStartButtonState({ disabled: true, text: '起動中…' });
+  startButton.disabled = true;
+  startButton.textContent = '起動中…';
   setStatus('starting');
-  setSubtitle('カメラとマイクを開始しています…');
+  setSubtitle('カメラとマイクの許可を確認しています。');
 
   try {
     await unlockAudioForMobile();
-
     const stream = await navigator.mediaDevices.getUserMedia({
       video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } },
       audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
     });
 
-    const videoTracks = stream.getVideoTracks();
-    const audioTracks = stream.getAudioTracks();
+    state.videoStream = new MediaStream(stream.getVideoTracks());
+    state.micStream = new MediaStream(stream.getAudioTracks());
+    videoEl.srcObject = state.videoStream;
+    await videoEl.play();
+    setupMicAnalyser(state.micStream);
 
-    if (!audioTracks.length) {
-      throw new Error('マイクの音声トラックを取得できませんでした。ブラウザのマイク許可を確認してください。');
+    if ('FaceDetector' in window) {
+      try { state.faceDetector = new FaceDetector({ fastMode: true, maxDetectedFaces: 1 }); } catch (_) { state.faceDetector = null; }
     }
 
-    if (!videoTracks.length) {
-      throw new Error('カメラの映像トラックを取得できませんでした。ブラウザのカメラ許可を確認してください。');
-    }
-
-    state.cameraStream = new MediaStream(videoTracks);
-    state.micStream = new MediaStream(audioTracks);
-
-    if (cameraVideo) {
-      cameraVideo.srcObject = state.cameraStream;
-      cameraVideo.muted = true;
-      cameraVideo.playsInline = true;
-      await cameraVideo.play();
-    }
-
-    // ここでカメラ・マイク許可は完了しているので、先にモーダルを閉じます。
-    // Realtime API接続に失敗しても、画面上にエラーを表示して切り分けできるようにします。
-    state.started = true;
-    state.connecting = false;
-    state.visionStartedAt = performance.now();
-    hidePermissionOverlay();
-    setStartButtonState({ disabled: false, text: 'カメラ・マイクを許可して開始' });
-    setStatus('connecting');
-    setPresenceStatus('checking');
-    setSubtitle('カメラとマイクを開始しました。Realtime APIへ接続しています…');
-
-    await setupFaceDetector();
-    await timeoutPromise(startRealtimeSession(state.micStream), 25000, 'Realtime API接続');
-
+    state.liveStarted = true;
+    state.mediaReady = true;
+    startOverlay.classList.add('hidden');
     setStatus('watching');
-    setPresenceStatus('watching');
-    setSubtitle('人を検知すると自動で話しかけます。話しかけても会話できます。');
+    setSubtitle('人物を検知すると自動で話しかけます。');
   } catch (error) {
     console.error('[start live failed]', error);
-
-    state.connecting = false;
-    setStartButtonState({ disabled: false, text: 'もう一度開始する' });
+    startButton.disabled = false;
+    startButton.textContent = 'カメラ・マイクを許可して開始';
     setStatus('error');
+    setSubtitle(`カメラまたはマイクを開始できません: ${error.message}`);
+  }
+}
 
-    const message = error?.message || String(error);
-    setSubtitle(`ライブ会話を開始できません: ${message}`);
+if (startButton) startButton.addEventListener('click', startLiveMode);
 
-    // カメラ・マイク取得前の失敗なら、許可用モーダルを残して再試行できるようにします。
-    // 取得後のRealtime接続失敗なら、モーダルは閉じたままエラーを表示します。
-    if (!state.micStream && !state.cameraStream) {
-      state.started = false;
-      showPermissionOverlay();
+async function liveLoop(now) {
+  if (!state.liveStarted || !state.mediaReady) return;
+
+  const personPresent = await detectPerson(now);
+  const stable = personPresent && now - state.personStableSince > PERSON.stableMs;
+  const canGreet = stable && !state.greetedThisPresence && now - state.lastGreetingAt > PERSON.greetCooldownMs;
+  if (canGreet && !state.busy && !state.talking && !state.recording) {
+    state.greetedThisPresence = true;
+    state.lastGreetingAt = now;
+    sendPersonDetectedGreeting();
+    return;
+  }
+
+  if (!stable || state.busy || state.talking) return;
+
+  const rms = updateRms();
+  if (!state.recording && rms > VAD.startThreshold) {
+    startSpeechSegment();
+    return;
+  }
+
+  if (state.recording) {
+    if (rms > VAD.stopThreshold) state.lastVoiceAt = now;
+    const elapsed = now - state.recordStartedAt;
+    const silent = now - state.lastVoiceAt;
+    if ((elapsed > VAD.minRecordMs && silent > VAD.silenceMs) || elapsed > VAD.maxRecordMs) {
+      stopSpeechSegment();
     }
   }
 }
-
-if (startButton) {
-  startButton.addEventListener('click', startLiveMode);
-} else {
-  console.error('HTMLに #startButton がありません。public/index.html も最新版に差し替えてください。');
-  setSubtitle('HTMLに開始ボタンがありません。index.htmlを最新版に差し替えてください。');
-}
-
-stage.addEventListener('pointerdown', () => {
-  if (state.remoteAudio) {
-    state.remoteAudio.play().catch(() => {});
-  }
-});
 
 function animate() {
   const delta = clock.getDelta();
   const elapsed = clock.elapsedTime;
-
+  const now = performance.now();
   particles.userData.material.uniforms.uTime.value = elapsed;
   updateCaption(delta * 1000);
-  updatePresence();
+  liveLoop(now);
 
-  const targetTalk = state.talking ? 1 : 0;
+  const targetTalk = state.talking ? 1 : state.recording ? 0.35 : 0;
   state.talkLevel += (targetTalk - state.talkLevel) * Math.min(1, delta * 4.5);
 
   if (avatarRoot) {
-    avatarGroup.position.set(
-      AVATAR_VIEW.x,
-      AVATAR_VIEW.y + Math.sin(elapsed * 0.72) * AVATAR_VIEW.floatAmount,
-      AVATAR_VIEW.z
-    );
-    avatarGroup.rotation.y =
-      THREE.MathUtils.degToRad(AVATAR_VIEW.yawDeg) +
-      Math.sin(elapsed * 0.18) * THREE.MathUtils.degToRad(AVATAR_VIEW.idleYawDeg);
+    avatarGroup.position.set(AVATAR_VIEW.x, AVATAR_VIEW.y + Math.sin(elapsed * 0.72) * AVATAR_VIEW.floatAmount, AVATAR_VIEW.z);
+    avatarGroup.rotation.y = THREE.MathUtils.degToRad(AVATAR_VIEW.yawDeg) + Math.sin(elapsed * 0.18) * THREE.MathUtils.degToRad(AVATAR_VIEW.idleYawDeg);
   }
 
   for (const mat of avatarMaterials) {
-    mat.opacity = 0.56 + state.talkLevel * 0.14 + Math.sin(elapsed * 5.5) * state.talkLevel * 0.02;
-    mat.emissiveIntensity = 0.016 + state.talkLevel * 0.08;
+    mat.opacity = 0.56 + state.talkLevel * 0.12 + Math.sin(elapsed * 5.5) * state.talkLevel * 0.02;
+    mat.emissiveIntensity = 0.016 + state.talkLevel * 0.065;
   }
 
   if (baseDisc && baseCone) {
@@ -654,7 +587,6 @@ function animate() {
 }
 
 setStatus('loading');
-setPresenceStatus('standby');
 loadAvatar().catch((error) => {
   console.error(error);
   setStatus('error');
