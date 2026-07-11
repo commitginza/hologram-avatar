@@ -2,33 +2,10 @@
 <html lang="ja">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Hologram Voice Avatar</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Realtime Hologram Avatar</title>
   <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
   <link rel="stylesheet" href="./styles.css" />
-</head>
-<body>
-  <main id="app">
-    <section id="stage" aria-label="Hologram avatar stage">
-      <div class="grid-layer"></div>
-      <div class="vignette"></div>
-    </section>
-
-    <div class="subtitle-panel">
-      <div class="subtitle-label">HOLOGRAM AI CONCIERGE</div>
-      <div id="subtitle" class="subtitle">マイクボタンを押して話しかけてください。</div>
-      <div id="transcript" class="transcript"></div>
-    </div>
-
-    <div class="mic-panel">
-      <button id="micButton" class="mic-button" type="button" aria-label="マイク開始">
-        <span class="mic-icon">●</span>
-      </button>
-      <div id="status" class="status">standby</div>
-    </div>
-  </main>
-
-  <script src="./config.js"></script>
   <script type="importmap">
   {
     "imports": {
@@ -37,6 +14,37 @@
     }
   }
   </script>
-  <script type="module" src="./app.js?v=20260709-2"></script>
+</head>
+<body>
+  <main id="stage" class="stage" aria-label="Realtime hologram avatar stage">
+    <video id="cameraVideo" class="camera-video" autoplay muted playsinline></video>
+    <canvas id="visionCanvas" class="vision-canvas"></canvas>
+
+    <section id="permissionOverlay" class="permission-overlay">
+      <div class="permission-card">
+        <p class="eyebrow">HOLOGRAM AI CONCIERGE</p>
+        <h1>ライブ会話を開始</h1>
+        <p>
+          カメラとマイクを許可すると、視界に人が入ったタイミングで話しかけ、以降は常時リアルタイムで会話します。
+        </p>
+        <button id="startButton" type="button">カメラ・マイクを許可して開始</button>
+        <p class="note">OpenAI APIキーはLambda側だけで使用します。ブラウザには置きません。</p>
+      </div>
+    </section>
+
+    <section class="caption-box">
+      <p class="eyebrow">HOLOGRAM AI CONCIERGE</p>
+      <p id="subtitle" class="subtitle">開始ボタンを押してください。</p>
+      <p id="transcript" class="transcript"></p>
+    </section>
+
+    <div class="status-panel">
+      <span>status: <strong id="status">loading</strong></span>
+      <span>presence: <strong id="presenceStatus">standby</strong></span>
+    </div>
+  </main>
+
+  <script src="./config.js"></script>
+  <script type="module" src="./app.js?v=20260711-realtime-v3"></script>
 </body>
 </html>
