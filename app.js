@@ -26,12 +26,12 @@ const MOUTH_OVERLAY = {
   // 口位置。x=左右, y=上下, z=手前/奥。
   // 今のモデル位置に合わせた初期値です。ズレたらConsoleから調整してください。
   x: 0.0,
-  y: 2.05,
+  y: -0.15,
   z: -0.55,
 
   // 口穴サイズ
-  width: 0.34,
-  closedHeight: 0.030,
+  width: 0.68,
+  closedHeight: 0.010,
   openHeight: 0.150,
 
   // 縁取り・動き
