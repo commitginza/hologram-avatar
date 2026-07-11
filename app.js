@@ -44,7 +44,17 @@ const state = {
   captionText: '',
   captionIndex: 0,
   captionTimer: 0,
+
+  // ===== Mobile audio playback unlock =====
+  // スマホブラウザでは、API応答後の audio.play() がユーザー操作から離れた再生と判定され、
+  // NotAllowedError 系でブロックされることがあります。
+  // そのため、マイクボタン押下時に AudioContext を一度解放し、TTS再生は Web Audio API で行います。
   audio: null,
+  audioContext: null,
+  audioUnlocked: false,
+  currentSource: null,
+  pendingAudio: null,
+
   sessionId: crypto.randomUUID?.() || String(Date.now())
 };
 
@@ -293,13 +303,28 @@ function getRecorderMimeType() {
 }
 
 async function startRecording() {
+  state.pendingAudio = null;
+  await stopCurrentTtsSource();
+
   if (!API_URL || API_URL.includes('YOUR_API_ID')) {
     setSubtitle('public/config.js の API_URL に API Gateway の /talk URL を設定してください。');
     return;
   }
 
+  if (!window.isSecureContext) {
+    throw new Error('HTTPSまたはlocalhostで開いてください。');
+  }
+
+  if (!navigator.mediaDevices?.getUserMedia) {
+    throw new Error('このブラウザではマイク機能が使えません。SafariまたはChromeで直接開いてください。');
+  }
+
   const stream = await navigator.mediaDevices.getUserMedia({
-    audio: true,
+    audio: {
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true
+    },
     video: false
   });
 
@@ -368,6 +393,131 @@ function blobToBase64(blob) {
     reader.onerror = reject;
     reader.readAsDataURL(blob);
   });
+}
+
+function getAudioContext() {
+  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+
+  if (!AudioContextClass) {
+    throw new Error('このブラウザではAudioContextが使えません。');
+  }
+
+  if (!state.audioContext) {
+    state.audioContext = new AudioContextClass();
+  }
+
+  return state.audioContext;
+}
+
+async function unlockAudioForMobile() {
+  try {
+    const context = getAudioContext();
+
+    if (context.state === 'suspended') {
+      await context.resume();
+    }
+
+    // iOS/Safari対策。
+    // ユーザー操作中に無音を一瞬だけ再生して、以後のWeb Audio再生を許可させます。
+    const buffer = context.createBuffer(1, 1, 22050);
+    const source = context.createBufferSource();
+    source.buffer = buffer;
+    source.connect(context.destination);
+    source.start(0);
+
+    state.audioUnlocked = true;
+
+    console.log('[audio unlock]', {
+      audioContextState: context.state,
+      audioUnlocked: state.audioUnlocked
+    });
+
+    return true;
+  } catch (error) {
+    console.warn('[audio unlock failed]', error);
+    return false;
+  }
+}
+
+function base64ToArrayBuffer(base64) {
+  const binary = window.atob(base64);
+  const bytes = new Uint8Array(binary.length);
+
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+
+  return bytes.buffer;
+}
+
+async function stopCurrentTtsSource() {
+  if (!state.currentSource) return;
+
+  try {
+    state.currentSource.stop();
+  } catch (_) {
+    // すでに停止済みの場合は無視
+  }
+
+  state.currentSource = null;
+}
+
+async function playTtsWithAudioContext(audioBase64, mime, text) {
+  const context = getAudioContext();
+
+  if (context.state === 'suspended') {
+    await context.resume();
+  }
+
+  const arrayBuffer = base64ToArrayBuffer(audioBase64);
+  const audioBuffer = await context.decodeAudioData(arrayBuffer.slice(0));
+
+  await stopCurrentTtsSource();
+
+  const source = context.createBufferSource();
+  source.buffer = audioBuffer;
+  source.connect(context.destination);
+
+  state.currentSource = source;
+  state.talking = true;
+
+  setStatus('speaking');
+  startCaption(text, Math.max(2200, audioBuffer.duration * 1000));
+
+  source.onended = () => {
+    if (state.currentSource === source) {
+      state.currentSource = null;
+    }
+
+    state.talking = false;
+    state.talkLevel = 0;
+
+    setStatus('standby');
+    setSubtitle(text);
+  };
+
+  source.start(0);
+}
+
+async function playPendingAudioIfExists() {
+  if (!state.pendingAudio) return;
+
+  const pending = state.pendingAudio;
+  state.pendingAudio = null;
+
+  try {
+    await unlockAudioForMobile();
+    await playTtsWithAudioContext(
+      pending.audioBase64,
+      pending.mime,
+      pending.text
+    );
+  } catch (error) {
+    console.error('[pending audio playback failed]', error);
+    state.pendingAudio = pending;
+    setSubtitle(`音声再生に失敗しました。もう一度画面をタップしてください。
+${error.message}`);
+  }
 }
 
 async function sendAudio(blob) {
@@ -443,38 +593,35 @@ async function speakResponse(data) {
     return;
   }
 
-  if (state.audio) {
-    state.audio.pause();
-    state.audio.src = '';
-  }
+  try {
+    await playTtsWithAudioContext(audioBase64, mime, text);
+  } catch (error) {
+    console.error('[tts playback failed]', error);
 
-  const audio = new Audio(`data:${mime};base64,${audioBase64}`);
-  state.audio = audio;
+    // スマホブラウザで再生が拒否された場合、次のタップで再生できるように保持します。
+    state.pendingAudio = {
+      audioBase64,
+      mime,
+      text
+    };
 
-  audio.addEventListener('play', () => {
-    state.talking = true;
-    setStatus('speaking');
-    startCaption(text, Math.max(2200, (audio.duration || 4) * 1000));
-  });
-
-  audio.addEventListener('ended', () => {
     state.talking = false;
     state.talkLevel = 0;
     setStatus('standby');
-    setSubtitle(text);
-  });
+    setSubtitle(
+      `${text}
 
-  audio.addEventListener('error', () => {
-    state.talking = false;
-    setStatus('standby');
-    setSubtitle(text);
-  });
-
-  await audio.play();
+スマホブラウザに音声再生がブロックされました。画面を一度タップすると再生します。`
+    );
+  }
 }
 
 micButton.addEventListener('click', async () => {
   try {
+    // スマホの自動再生制限対策。
+    // ユーザー操作中にAudioContextを解放しておくことで、API応答後のTTS再生失敗を減らします。
+    await unlockAudioForMobile();
+
     if (state.recording) {
       stopRecording();
     } else {
@@ -489,6 +636,22 @@ micButton.addEventListener('click', async () => {
     setMicUi();
     setStatus('error');
     setSubtitle(`マイクを開始できません: ${error.message}`);
+  }
+});
+
+// iOS/SafariなどでAPI応答後の音声再生がブロックされた場合の救済。
+// 画面を一度タップすると、保持していたTTS音声を再生します。
+stage.addEventListener('pointerdown', async () => {
+  await playPendingAudioIfExists();
+});
+
+document.addEventListener('visibilitychange', async () => {
+  if (document.visibilityState === 'visible' && state.audioContext?.state === 'suspended') {
+    try {
+      await state.audioContext.resume();
+    } catch (_) {
+      // resumeできない場合は次回タップで解除する
+    }
   }
 });
 
