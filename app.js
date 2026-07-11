@@ -63,6 +63,34 @@ const state = {
   lastGreetingAt: 0
 };
 
+
+function hidePermissionOverlay() {
+  if (permissionOverlay) permissionOverlay.classList.add('hidden');
+}
+
+function showPermissionOverlay() {
+  if (permissionOverlay) permissionOverlay.classList.remove('hidden');
+}
+
+function setStartButtonState({ disabled = false, text = '' } = {}) {
+  if (!startButton) return;
+  startButton.disabled = disabled;
+  if (text) startButton.textContent = text;
+}
+
+function timeoutPromise(promise, ms, label) {
+  let timer = null;
+  const timeout = new Promise((_, reject) => {
+    timer = window.setTimeout(() => {
+      reject(new Error(`${label} が ${Math.round(ms / 1000)}秒以内に完了しませんでした。API Gateway / Lambda / OpenAI Realtime接続を確認してください。`));
+    }, ms);
+  });
+
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer) window.clearTimeout(timer);
+  });
+}
+
 const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(stage.clientWidth, stage.clientHeight);
@@ -505,8 +533,9 @@ async function unlockAudioForMobile() {
 
 async function startLiveMode() {
   if (state.connecting || state.started) return;
+
   state.connecting = true;
-  if (startButton) startButton.disabled = true;
+  setStartButtonState({ disabled: true, text: '起動中…' });
   setStatus('starting');
   setSubtitle('カメラとマイクを開始しています…');
 
@@ -520,6 +549,15 @@ async function startLiveMode() {
 
     const videoTracks = stream.getVideoTracks();
     const audioTracks = stream.getAudioTracks();
+
+    if (!audioTracks.length) {
+      throw new Error('マイクの音声トラックを取得できませんでした。ブラウザのマイク許可を確認してください。');
+    }
+
+    if (!videoTracks.length) {
+      throw new Error('カメラの映像トラックを取得できませんでした。ブラウザのカメラ許可を確認してください。');
+    }
+
     state.cameraStream = new MediaStream(videoTracks);
     state.micStream = new MediaStream(audioTracks);
 
@@ -530,21 +568,39 @@ async function startLiveMode() {
       await cameraVideo.play();
     }
 
-    await setupFaceDetector();
-    await startRealtimeSession(state.micStream);
-
+    // ここでカメラ・マイク許可は完了しているので、先にモーダルを閉じます。
+    // Realtime API接続に失敗しても、画面上にエラーを表示して切り分けできるようにします。
     state.started = true;
     state.connecting = false;
     state.visionStartedAt = performance.now();
-    if (permissionOverlay) permissionOverlay.classList.add('hidden');
+    hidePermissionOverlay();
+    setStartButtonState({ disabled: false, text: 'カメラ・マイクを許可して開始' });
+    setStatus('connecting');
+    setPresenceStatus('checking');
+    setSubtitle('カメラとマイクを開始しました。Realtime APIへ接続しています…');
+
+    await setupFaceDetector();
+    await timeoutPromise(startRealtimeSession(state.micStream), 25000, 'Realtime API接続');
+
     setStatus('watching');
     setPresenceStatus('watching');
+    setSubtitle('人を検知すると自動で話しかけます。話しかけても会話できます。');
   } catch (error) {
     console.error('[start live failed]', error);
+
     state.connecting = false;
-    if (startButton) startButton.disabled = false;
+    setStartButtonState({ disabled: false, text: 'もう一度開始する' });
     setStatus('error');
-    setSubtitle(`ライブ会話を開始できません: ${error.message}`);
+
+    const message = error?.message || String(error);
+    setSubtitle(`ライブ会話を開始できません: ${message}`);
+
+    // カメラ・マイク取得前の失敗なら、許可用モーダルを残して再試行できるようにします。
+    // 取得後のRealtime接続失敗なら、モーダルは閉じたままエラーを表示します。
+    if (!state.micStream && !state.cameraStream) {
+      state.started = false;
+      showPermissionOverlay();
+    }
   }
 }
 
