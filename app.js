@@ -5,7 +5,7 @@ const CONFIG = window.HOLOGRAM_CONFIG || {};
 const API_URL = CONFIG.API_URL || '';
 const MODEL_URL = CONFIG.MODEL_URL || 'https://watchimg.s3.ap-northeast-1.amazonaws.com/glb/avatar-v1.glb';
 
-const APP_BUILD = 'human-avatar-pose-skeleton-mouth-v8-waiting-prompt-no-auto-greet-20260712';
+const APP_BUILD = 'human-avatar-skeleton-display-v9-neutral-skeleton-20260712';
 window.APP_BUILD = APP_BUILD;
 console.info(`[app.js loaded] ${APP_BUILD}`, import.meta.url);
 
@@ -94,6 +94,28 @@ const HOLOGRAM = {
   materialFlickerAmount: 0.02,
   emissiveIntensity: 0.018,
   emissiveTalkBoost: 0.065
+};
+
+// ===== Model display preset =====
+// GLBのSkeleton/Boneは「骨組み」で、色や質感はMaterialで決まります。
+// そのため、色付きGLBを避けたい場合は、Materialを中立色に差し替えつつSkeletonHelperを表示します。
+// mode:
+//   original         : GLB本来の色付きMaterial
+//   neutral         : 色を消した中立マテリアル
+//   neutralSkeleton : 中立マテリアル + SkeletonHelper
+//   skeleton        : メッシュを非表示にしてSkeletonHelperだけ表示
+//   wireframeSkeleton: ワイヤーフレーム + SkeletonHelper
+const MODEL_DISPLAY = {
+  mode: 'neutralSkeleton',
+  showSkeletonHelper: true,
+  neutralColor: 0xe7edf0,
+  neutralEmissive: 0x000000,
+  neutralOpacity: 1.0,
+  roughness: 0.62,
+  metalness: 0.02,
+  wireframe: false,
+  depthWrite: true,
+  side: 'front' // front / double
 };
 
 // ===== Skeleton / animation preset =====
@@ -441,6 +463,79 @@ function prepareAvatarMaterials(object) {
   setHologramEnabled(HOLOGRAM.enabled, false);
 }
 
+function buildNeutralDisplayMaterial(mode = MODEL_DISPLAY.mode) {
+  const modeName = String(mode || '').toLowerCase();
+  const wantsWireframe = MODEL_DISPLAY.wireframe || modeName.includes('wireframe');
+  const wantsXray = modeName.includes('xray') || MODEL_DISPLAY.neutralOpacity < 1;
+
+  return new THREE.MeshStandardMaterial({
+    color: MODEL_DISPLAY.neutralColor,
+    roughness: MODEL_DISPLAY.roughness,
+    metalness: MODEL_DISPLAY.metalness,
+    emissive: MODEL_DISPLAY.neutralEmissive,
+    transparent: wantsXray,
+    opacity: MODEL_DISPLAY.neutralOpacity,
+    depthWrite: MODEL_DISPLAY.depthWrite && !wantsXray,
+    side: MODEL_DISPLAY.side === 'double' ? THREE.DoubleSide : THREE.FrontSide,
+    wireframe: wantsWireframe
+  });
+}
+
+function getNeutralMaterialFor(child, modeName) {
+  const key = [
+    'displayMaterial',
+    modeName,
+    MODEL_DISPLAY.neutralColor,
+    MODEL_DISPLAY.neutralOpacity,
+    MODEL_DISPLAY.wireframe,
+    MODEL_DISPLAY.side
+  ].join(':');
+
+  if (!child.userData[key]) {
+    child.userData[key] = buildNeutralDisplayMaterial(modeName);
+  }
+
+  return child.userData[key];
+}
+
+function applyModelDisplayToMesh(child) {
+  const modeName = String(MODEL_DISPLAY.mode || 'original').toLowerCase();
+
+  if (modeName === 'original') {
+    child.visible = true;
+    child.material = originalAvatarMaterials.get(child) || child.material;
+    child.renderOrder = 0;
+    return;
+  }
+
+  if (modeName === 'skeleton' || modeName === 'skeletononly' || modeName === 'bones') {
+    child.visible = false;
+    child.material = originalAvatarMaterials.get(child) || child.material;
+    child.renderOrder = 0;
+    return;
+  }
+
+  child.visible = true;
+  child.material = getNeutralMaterialFor(child, modeName);
+  child.renderOrder = modeName.includes('xray') ? 2 : 0;
+}
+
+function refreshSkeletonHelperFromDisplayMode() {
+  const modeName = String(MODEL_DISPLAY.mode || '').toLowerCase();
+  const shouldShow = !HOLOGRAM.enabled && (
+    MODEL_DISPLAY.showSkeletonHelper ||
+    modeName.includes('skeleton') ||
+    modeName === 'skeleton' ||
+    modeName === 'bones'
+  );
+
+  SKELETON.showHelper = shouldShow;
+
+  if (typeof window.showSkeletonHelper === 'function' && avatarRoot) {
+    window.showSkeletonHelper(shouldShow);
+  }
+}
+
 function setHologramEnabled(enabled = true, shouldLog = true) {
   HOLOGRAM.enabled = !!enabled;
   avatarMaterials.length = 0;
@@ -450,6 +545,7 @@ function setHologramEnabled(enabled = true, shouldLog = true) {
       if (!child.isMesh) return;
 
       if (HOLOGRAM.enabled && HOLOGRAM.useMaterial) {
+        child.visible = true;
         if (!child.userData.hologramMaterial) {
           child.userData.hologramMaterial = buildHologramMaterial();
         }
@@ -457,8 +553,7 @@ function setHologramEnabled(enabled = true, shouldLog = true) {
         child.renderOrder = 1;
         avatarMaterials.push(child.material);
       } else {
-        child.material = originalAvatarMaterials.get(child) || child.material;
-        child.renderOrder = 0;
+        applyModelDisplayToMesh(child);
       }
     });
   }
@@ -466,10 +561,13 @@ function setHologramEnabled(enabled = true, shouldLog = true) {
   scene.fog = HOLOGRAM.enabled && HOLOGRAM.useFog ? HOLOGRAM_FOG : null;
   if (particles) particles.visible = HOLOGRAM.enabled && HOLOGRAM.useParticles;
   if (projectionBaseGroup) projectionBaseGroup.visible = HOLOGRAM.enabled && HOLOGRAM.useBase;
+  refreshSkeletonHelperFromDisplayMode();
 
   if (shouldLog) {
-    console.log('[hologram]', {
-      ...HOLOGRAM,
+    console.log('[display]', {
+      hologram: { ...HOLOGRAM },
+      modelDisplay: { ...MODEL_DISPLAY },
+      skeletonHelper: SKELETON.showHelper,
       avatarMaterialCount: avatarMaterials.length
     });
   }
@@ -593,11 +691,32 @@ window.toggleHologram = () => {
   window.setHologram(!HOLOGRAM.enabled);
 };
 
+window.setModelDisplayMode = (modeOrPatch = 'neutralSkeleton', patch = {}) => {
+  if (typeof modeOrPatch === 'object') {
+    Object.assign(MODEL_DISPLAY, modeOrPatch);
+  } else {
+    MODEL_DISPLAY.mode = String(modeOrPatch || 'neutralSkeleton');
+    Object.assign(MODEL_DISPLAY, patch);
+  }
+
+  // 通常表示系に切り替える時は、ホログラム素材はOFFにします。
+  HOLOGRAM.enabled = false;
+  setHologramEnabled(false, true);
+  return { ...MODEL_DISPLAY };
+};
+
+window.showOriginalGlbColors = () => window.setModelDisplayMode('original', { showSkeletonHelper: false });
+window.showNeutralModel = () => window.setModelDisplayMode('neutral', { showSkeletonHelper: false, wireframe: false, neutralOpacity: 1 });
+window.showNeutralSkeleton = () => window.setModelDisplayMode('neutralSkeleton', { showSkeletonHelper: true, wireframe: false, neutralOpacity: 1 });
+window.showSkeletonView = () => window.setModelDisplayMode('skeleton', { showSkeletonHelper: true });
+window.showWireframeSkeleton = () => window.setModelDisplayMode('wireframeSkeleton', { showSkeletonHelper: true, wireframe: true, neutralOpacity: 1 });
+
 window.getAvatarDebug = () => {
   const debug = {
     AVATAR_VIEW: { ...AVATAR_VIEW },
     MOUTH_OVERLAY: { ...MOUTH_OVERLAY },
     HOLOGRAM: { ...HOLOGRAM },
+    MODEL_DISPLAY: { ...MODEL_DISPLAY },
     SKELETON: { ...SKELETON },
     BONE_POSE: JSON.parse(JSON.stringify(BONE_POSE)),
     skeleton: { boneCount: bones.length, animationCount: loadedAnimations.length, activeAnimation: activeAnimationAction?._clip?.name || null },
@@ -612,6 +731,7 @@ window.copyAvatarSettings = async () => {
     AVATAR_VIEW,
     MOUTH_OVERLAY,
     HOLOGRAM,
+    MODEL_DISPLAY,
     SKELETON,
     BONE_POSE
   };
@@ -1646,7 +1766,7 @@ function stopSpeechSegment() {
   if (!state.recorder || !state.recording || state.recorder.state === 'inactive') return;
   clearWaitingPrompt();
   setStatus('thinking');
-  setSubtitle('ただいま内容を確認していますので、今しばらくお待ちください。');
+  setSubtitle('少々お待ちください。');
   state.recorder.stop();
 }
 
@@ -1968,6 +2088,12 @@ window.checkAvatarConsoleFunctions = () => {
     'showMouthOverlay',
     'setHologram',
     'toggleHologram',
+    'setModelDisplayMode',
+    'showOriginalGlbColors',
+    'showNeutralModel',
+    'showNeutralSkeleton',
+    'showSkeletonView',
+    'showWireframeSkeleton',
     'inspectSkeleton',
     'listBones',
     'listAnimations',
@@ -2004,7 +2130,8 @@ console.info('[avatar console ready]', {
   listBones: typeof window.listBones,
   listAnimations: typeof window.listAnimations,
   showSkeletonHelper: typeof window.showSkeletonHelper,
-  setWaitingPrompt: typeof window.setWaitingPrompt
+  setWaitingPrompt: typeof window.setWaitingPrompt,
+  setModelDisplayMode: typeof window.setModelDisplayMode
 });
 
 setStatus('loading');
