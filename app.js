@@ -5,7 +5,7 @@ const CONFIG = window.HOLOGRAM_CONFIG || {};
 const API_URL = CONFIG.API_URL || '';
 const MODEL_URL = CONFIG.MODEL_URL || 'https://watchimg.s3.ap-northeast-1.amazonaws.com/glb/avatar-v1.glb';
 
-const APP_BUILD = 'human-avatar-textured-hologram-v10-20260712';
+const APP_BUILD = 'human-avatar-turn-only-v12-20260712';
 window.APP_BUILD = APP_BUILD;
 console.info(`[app.js loaded] ${APP_BUILD}`, import.meta.url);
 
@@ -336,7 +336,7 @@ const state = {
   waitingForSpeech: false,
   waitingPromptKind: '',
   lastWaitingPromptAt: 0,
-  lastSpeechEndedAt: 0
+  lastSpeechEndedAt: 0,
 };
 
 const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
@@ -1901,6 +1901,7 @@ async function postToTalk(payload) {
   if (!response.ok) throw new Error(data.detail || data.error || `API error: ${response.status}`);
   return data;
 }
+
 
 async function sendAudio(blob) {
   try {
