@@ -4,5 +4,5 @@ window.HOLOGRAM_CONFIG = {
 
   SESSION_URL: 'https://gk1qutuk54.execute-api.ap-northeast-1.amazonaws.com/session',
   // S3上のGLB。ファイル名を変えた場合はここを変更してください。
-  MODEL_URL: 'https://watchimg.s3.ap-northeast-1.amazonaws.com/glb/avatar-v6.glb'
+  MODEL_URL: 'https://watchimg.s3.ap-northeast-1.amazonaws.com/glb/avatar-v7.glb'
 };
