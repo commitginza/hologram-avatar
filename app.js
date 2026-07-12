@@ -10,19 +10,19 @@ const MODEL_URL = CONFIG.MODEL_URL || 'https://watchimg.s3.ap-northeast-1.amazon
 // 例: window.setAvatarView({ yawDeg: 0, y: -0.6, z: -1.6, cameraZ: 9.5, targetHeight: 4.8 })
 const AVATAR_VIEW = {
   // モデルの向き。人型で正面が合わない場合は yawDeg を 0 / 90 / -90 / 180 で試してください。
-  yawDeg: 0,
+  yawDeg: -90,
   pitchDeg: 0,
   rollDeg: 0,
 
   // モデル全体の表示位置
   x: 0,
-  y: -0.55,
+  y: -0.4,
   z: -1.35,
 
   // カメラ位置
   cameraX: 0,
   cameraY: 0.35,
-  cameraZ: 9.2,
+  cameraZ: 4.8,
 
   // カメラの注視点
   lookAtX: 0,
@@ -38,7 +38,7 @@ const AVATAR_VIEW = {
   fitOffsetZ: 0,
 
   idleYawDeg: 0.35,
-  floatAmount: 0.012
+  floatAmount: 0.01
 };
 
 // ===== Mouth overlay preset =====
@@ -54,24 +54,23 @@ const MOUTH_OVERLAY = {
   attachTo: 'root',
 
   // 口位置。x=左右, y=上下, z=手前/奥。
-  // 人型は顔型より口を小さめ・上寄りにします。
-  x: 0.0,
-  y: 1.10,
-  z: -0.70,
+  x: 0,
+  y: 0.84,
+  z: -0.7,
 
   // 口穴サイズ
   width: 0.18,
   closedHeight: 0.008,
-  openHeight: 0.070,
+  openHeight: 0.07,
 
   // 縁取り・動き
   rimOpacity: 0.34,
   openPower: 1.15,
   moveDownWhileOpen: 0.012,
-  widenWhileOpen: 0.10,
+  widenWhileOpen: 0.1,
 
   // 音声波形が取得できない時の疑似口パク
-  fallbackWaveSpeedA: 11.0,
+  fallbackWaveSpeedA: 11,
   fallbackWaveSpeedB: 17.7,
   smooth: 16
 };
@@ -79,13 +78,13 @@ const MOUTH_OVERLAY = {
 // ===== Hologram effect preset =====
 // Consoleで window.setHologram(false) / window.setHologram(true) / window.setHologram({ materialOpacity: 0.4 }) が使えます。
 const HOLOGRAM = {
-  enabled: true,
+  enabled: false,
   useMaterial: true,
   useParticles: true,
   useBase: true,
   useFog: true,
   useFlicker: true,
-  materialOpacity: 0.58,
+  materialOpacity: 0.05,
   materialTalkOpacityBoost: 0.12,
   materialFlickerAmount: 0.02,
   emissiveIntensity: 0.018,
@@ -430,15 +429,15 @@ window.copyAvatarSettings = async () => {
 
 window.applyHumanPreset = () => {
   window.setAvatarView({
-    yawDeg: 0,
+    yawDeg: -90,
     pitchDeg: 0,
     rollDeg: 0,
     x: 0,
-    y: -0.55,
+    y: -0.4,
     z: -1.35,
     cameraX: 0,
     cameraY: 0.35,
-    cameraZ: 9.2,
+    cameraZ: 4.8,
     lookAtX: 0,
     lookAtY: 0.15,
     lookAtZ: 0,
@@ -447,20 +446,41 @@ window.applyHumanPreset = () => {
     fitOffsetY: -0.55,
     fitOffsetZ: 0,
     idleYawDeg: 0.35,
-    floatAmount: 0.012
+    floatAmount: 0.01
   });
 
   window.setMouthOverlay({
     attachTo: 'root',
     enabled: true,
     visible: true,
-    x: 0.0,
-    y: 1.10,
-    z: -0.70,
+    alwaysVisible: true,
+    x: 0,
+    y: 0.84,
+    z: -0.7,
     width: 0.18,
     closedHeight: 0.008,
-    openHeight: 0.070,
-    moveDownWhileOpen: 0.012
+    openHeight: 0.07,
+    rimOpacity: 0.34,
+    openPower: 1.15,
+    moveDownWhileOpen: 0.012,
+    widenWhileOpen: 0.1,
+    fallbackWaveSpeedA: 11,
+    fallbackWaveSpeedB: 17.7,
+    smooth: 16
+  });
+
+  window.setHologram({
+    enabled: false,
+    useMaterial: true,
+    useParticles: true,
+    useBase: true,
+    useFog: true,
+    useFlicker: true,
+    materialOpacity: 0.05,
+    materialTalkOpacityBoost: 0.12,
+    materialFlickerAmount: 0.02,
+    emissiveIntensity: 0.018,
+    emissiveTalkBoost: 0.065
   });
 };
 
