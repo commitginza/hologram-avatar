@@ -5,7 +5,7 @@ const CONFIG = window.HOLOGRAM_CONFIG || {};
 const API_URL = CONFIG.API_URL || '';
 const MODEL_URL = CONFIG.MODEL_URL || 'https://watchimg.s3.ap-northeast-1.amazonaws.com/glb/avatar-v1.glb';
 
-const APP_BUILD = 'human-avatar-pose-skeleton-mouth-v5-requested-pose-20260712';
+const APP_BUILD = 'human-avatar-pose-skeleton-mouth-v8-waiting-prompt-no-auto-greet-20260712';
 window.APP_BUILD = APP_BUILD;
 console.info(`[app.js loaded] ${APP_BUILD}`, import.meta.url);
 
@@ -61,12 +61,12 @@ const MOUTH_OVERLAY = {
   // 口位置。x=左右, y=上下, z=手前/奥。
   x: 0,
   y: 0.78,
-  z: -0.7,
+  z: -0.70,
 
   // 口穴サイズ
   width: 0.08,
   closedHeight: 0.008,
-  openHeight: 0.03,
+  openHeight: 0.07,
 
   // 縁取り・動き
   rimOpacity: 0.34,
@@ -214,6 +214,32 @@ const PERSON = {
   greetCooldownMs: 60000
 };
 
+// ===== Waiting / listening prompt =====
+// ユーザーが「いつ話せばよいか」分かるよう、待機中の表示を出します。
+// Console例:
+//   window.setWaitingPrompt({ readyText: 'お話しください。お待ちしています。' })
+//   window.setWaitingPrompt({ autoGreetingEnabled: false })
+const WAITING = {
+  enabled: true,
+
+  // 人物を検知した後に自動挨拶を行うか。falseにすると、会話があるまで完全に待機します。
+  autoGreetingEnabled: false,
+
+  // TTS再生終了後、少し待ってから「話してよい」表示へ切り替えます。
+  promptDelayMs: 500,
+
+  // 同じ待機文言をDOMへ連続反映しないための間隔。
+  refreshMs: 1800,
+
+  waitingStatus: 'waiting',
+  watchingStatus: 'watching',
+
+  noPersonText: 'お客様をお待ちしています。前にお立ちください。',
+  preparingText: 'お客様を確認しています。少しお待ちください。',
+  readyText: 'お話しください。会話をお待ちしています。',
+  afterAnswerText: '続けてお話しください。お待ちしています。'
+};
+
 const stage = document.getElementById('stage');
 const startOverlay = document.getElementById('startOverlay');
 const startButton = document.getElementById('startButton');
@@ -266,7 +292,12 @@ const state = {
   faceDetector: null,
   sessionId: crypto.randomUUID?.() || String(Date.now()),
 
-  skeletonPaused: false
+  skeletonPaused: false,
+
+  waitingForSpeech: false,
+  waitingPromptKind: '',
+  lastWaitingPromptAt: 0,
+  lastSpeechEndedAt: 0
 };
 
 const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
@@ -329,6 +360,52 @@ scene.add(rim);
 function setStatus(text) { statusEl.textContent = text; }
 function setSubtitle(text) { subtitleEl.textContent = text; }
 function setTranscript(text) { transcriptEl.textContent = text ? `認識: ${text}` : ''; }
+
+function clearWaitingPrompt() {
+  state.waitingForSpeech = false;
+  state.waitingPromptKind = '';
+}
+
+function showWaitingPrompt(kind = 'ready', text = '') {
+  if (!WAITING.enabled) return;
+  if (state.recording || state.busy || state.talking) return;
+
+  const now = performance.now();
+
+  // 回答音声が終わった直後は、最後の字幕を一瞬だけ残してから待機表示に切り替える。
+  if (state.lastSpeechEndedAt && now - state.lastSpeechEndedAt < WAITING.promptDelayMs) return;
+
+  const message = text || (
+    kind === 'noPerson' ? WAITING.noPersonText :
+    kind === 'preparing' ? WAITING.preparingText :
+    state.lastSpeechEndedAt ? WAITING.afterAnswerText : WAITING.readyText
+  );
+
+  if (
+    state.waitingPromptKind === kind &&
+    now - state.lastWaitingPromptAt < WAITING.refreshMs &&
+    subtitleEl.textContent === message
+  ) {
+    return;
+  }
+
+  state.waitingPromptKind = kind;
+  state.lastWaitingPromptAt = now;
+  state.waitingForSpeech = kind === 'ready';
+
+  setStatus(kind === 'ready' ? WAITING.waitingStatus : WAITING.watchingStatus);
+  setSubtitle(message);
+}
+
+window.setWaitingPrompt = (patch = {}) => {
+  Object.assign(WAITING, patch);
+  console.log('[waiting prompt]', WAITING);
+  return WAITING;
+};
+
+window.showWaitingPrompt = (text = '') => {
+  showWaitingPrompt('ready', text || WAITING.readyText);
+};
 
 function resize() {
   const width = stage.clientWidth;
@@ -579,9 +656,9 @@ window.applyHumanPreset = () => {
     visible: true,
     alwaysVisible: true,
     x: 0,
-    y: 0.84,
-    z: -0.7,
-    width: 0.18,
+    y: 0.78,
+    z: -0.70,
+    width: 0.08,
     closedHeight: 0.008,
     openHeight: 0.07,
     rimOpacity: 0.34,
@@ -1467,6 +1544,7 @@ function base64ToArrayBuffer(base64) {
 async function playTts(audioBase64, text) {
   if (!audioBase64) {
     setSubtitle(text);
+    state.lastSpeechEndedAt = performance.now();
     return;
   }
   await unlockAudioForMobile();
@@ -1501,6 +1579,7 @@ async function playTts(audioBase64, text) {
     state.ttsAnalyser = null;
     state.ttsAnalyserData = null;
     updateMouthOverlay(0, clock.elapsedTime || 0);
+    state.lastSpeechEndedAt = performance.now();
     setStatus('watching');
     setSubtitle(text);
   };
@@ -1537,6 +1616,7 @@ function updateRms() {
 
 function startSpeechSegment() {
   if (state.recording || state.busy || state.talking || !state.micStream) return;
+  clearWaitingPrompt();
   const mimeType = getRecorderMimeType();
   const recorder = new MediaRecorder(state.micStream, mimeType ? { mimeType } : undefined);
   state.chunks = [];
@@ -1547,6 +1627,7 @@ function startSpeechSegment() {
     const blob = new Blob(state.chunks, { type: recorder.mimeType || 'audio/webm' });
     if (blob.size < 900) {
       state.recording = false;
+      state.lastSpeechEndedAt = performance.now();
       return;
     }
     state.recording = false;
@@ -1563,6 +1644,7 @@ function startSpeechSegment() {
 
 function stopSpeechSegment() {
   if (!state.recorder || !state.recording || state.recorder.state === 'inactive') return;
+  clearWaitingPrompt();
   setStatus('thinking');
   setSubtitle('少々お待ちください。');
   state.recorder.stop();
@@ -1782,7 +1864,7 @@ async function startLiveMode() {
     state.mediaReady = true;
     startOverlay.classList.add('hidden');
     setStatus('watching');
-    setSubtitle('人物を検知すると自動で話しかけます。');
+    setSubtitle(WAITING.autoGreetingEnabled ? '人物を検知すると自動で話しかけます。' : WAITING.noPersonText);
   } catch (error) {
     console.error('[start live failed]', error);
     startButton.disabled = false;
@@ -1799,8 +1881,19 @@ async function liveLoop(now) {
 
   const personPresent = await detectPerson(now);
   const stable = personPresent && now - state.personStableSince > PERSON.stableMs;
+
+  // 会話処理中以外は、今どの状態なのかを字幕で示す。
+  if (!state.busy && !state.talking && !state.recording) {
+    if (!personPresent) {
+      showWaitingPrompt('noPerson');
+    } else if (!stable) {
+      showWaitingPrompt('preparing');
+    }
+  }
+
   const canGreet = stable && !state.greetedThisPresence && now - state.lastGreetingAt > PERSON.greetCooldownMs;
-  if (canGreet && !state.busy && !state.talking && !state.recording) {
+  if (WAITING.autoGreetingEnabled && canGreet && !state.busy && !state.talking && !state.recording) {
+    clearWaitingPrompt();
     state.greetedThisPresence = true;
     state.lastGreetingAt = now;
     sendPersonDetectedGreeting();
@@ -1815,6 +1908,12 @@ async function liveLoop(now) {
     return;
   }
 
+  // 安定して人物がいて、音声入力待ちの時は明示的に「話してよい」状態を出す。
+  if (!state.recording) {
+    showWaitingPrompt('ready');
+    return;
+  }
+
   if (state.recording) {
     if (rms > VAD.stopThreshold) state.lastVoiceAt = now;
     const elapsed = now - state.recordStartedAt;
@@ -1824,6 +1923,7 @@ async function liveLoop(now) {
     }
   }
 }
+
 
 function animate() {
   const delta = clock.getDelta();
@@ -1837,7 +1937,7 @@ function animate() {
     animationMixer.update(delta * (Number(SKELETON.timeScale) || 1));
   }
 
-  const targetTalk = state.talking ? 1 : state.recording ? 0.35 : 0;
+  const targetTalk = state.talking ? 1 : state.recording ? 0.35 : state.waitingForSpeech ? 0.08 : 0;
   state.talkLevel += (targetTalk - state.talkLevel) * Math.min(1, delta * 4.5);
   updateMouth(delta, elapsed);
 
@@ -1888,7 +1988,9 @@ window.checkAvatarConsoleFunctions = () => {
     'setAnimationTimeScale',
     'setBoneRotation',
     'resetBone',
-    'resetAllBones'
+    'resetAllBones',
+    'setWaitingPrompt',
+    'showWaitingPrompt'
   ];
   const result = Object.fromEntries(names.map((name) => [name, typeof window[name]]));
   console.table(result);
@@ -1901,7 +2003,8 @@ console.info('[avatar console ready]', {
   inspectSkeleton: typeof window.inspectSkeleton,
   listBones: typeof window.listBones,
   listAnimations: typeof window.listAnimations,
-  showSkeletonHelper: typeof window.showSkeletonHelper
+  showSkeletonHelper: typeof window.showSkeletonHelper,
+  setWaitingPrompt: typeof window.setWaitingPrompt
 });
 
 setStatus('loading');
