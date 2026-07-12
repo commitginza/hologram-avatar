@@ -5,7 +5,7 @@ const CONFIG = window.HOLOGRAM_CONFIG || {};
 const API_URL = CONFIG.API_URL || '';
 const MODEL_URL = CONFIG.MODEL_URL || 'https://watchimg.s3.ap-northeast-1.amazonaws.com/glb/avatar-v1.glb';
 
-const APP_BUILD = 'human-avatar-turn-only-v15-preserve-answer-subtitle-20260712';
+const APP_BUILD = 'human-avatar-turn-only-v16-wav-preroll-20260712';
 window.APP_BUILD = APP_BUILD;
 console.info(`[app.js loaded] ${APP_BUILD}`, import.meta.url);
 
@@ -242,7 +242,7 @@ const BONE_POSE = {
 
 const VAD = {
   // 声を検知してから録音を開始すると、語頭が欠けます。
-  // そのため、待機中もMediaRecorderを常時回して直近音声をpre-rollとして保持します。
+  // そのため、AudioContextで直近PCM音声をpre-rollとして保持し、WAVで送信します。
   startThreshold: 0.035,
   stopThreshold: 0.020,
   silenceMs: 1050,
@@ -310,14 +310,23 @@ const state = {
   videoStream: null,
   micStream: null,
 
-  // 常時録音用MediaRecorder。
-  // VADで話し始めを検知した時、直近preRollMs分の音声を先頭に付けることで語頭欠けを防ぎます。
+  // 常時PCMキャプチャ用。
+  // MediaRecorderの途中チャンクをつなぐとWebMヘッダーが欠けて破損しやすいため、
+  // pre-rollはPCMで保持し、送信時に正しいWAVとして生成します。
   recorder: null,
-  preRollChunks: [],
-  segmentChunks: [],
+  micSource: null,
+  micProcessor: null,
+  micZeroGain: null,
+  pcmCaptureReady: false,
+  sampleRate: 48000,
+  preRollSampleChunks: [],
+  preRollSampleCount: 0,
+  segmentSampleChunks: [],
+  segmentSampleCount: 0,
   segmentClosing: false,
+  lastAudioBlob: null,
 
-  // 後方互換用。実際の録音セグメントはsegmentChunksを使います。
+  // 後方互換用。
   chunks: [],
   recording: false,
   busy: false,
@@ -1872,12 +1881,17 @@ function getRecorderMimeType() {
 function setupMicAnalyser(stream) {
   const AudioContextClass = window.AudioContext || window.webkitAudioContext;
   if (!state.audioContext) state.audioContext = new AudioContextClass();
-  const source = state.audioContext.createMediaStreamSource(stream);
+
+  if (!state.micSource) {
+    state.micSource = state.audioContext.createMediaStreamSource(stream);
+  }
+
   const analyser = state.audioContext.createAnalyser();
   analyser.fftSize = 1024;
-  source.connect(analyser);
+  state.micSource.connect(analyser);
   state.analyser = analyser;
   state.analyserData = new Uint8Array(analyser.fftSize);
+  state.sampleRate = state.audioContext.sampleRate || 48000;
 }
 
 function updateRms() {
@@ -1896,60 +1910,134 @@ function delay(ms) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
-function trimPreRollChunks(now = performance.now()) {
-  const cutoff = now - VAD.preRollMs;
-  state.preRollChunks = state.preRollChunks.filter((item) => item.ts >= cutoff);
+function getPreRollMaxSamples() {
+  const sampleRate = state.sampleRate || state.audioContext?.sampleRate || 48000;
+  return Math.max(1, Math.floor(sampleRate * VAD.preRollMs / 1000));
+}
+
+function trimPreRollSamples() {
+  const maxSamples = getPreRollMaxSamples();
+
+  while (state.preRollSampleCount > maxSamples && state.preRollSampleChunks.length > 1) {
+    const first = state.preRollSampleChunks.shift();
+    state.preRollSampleCount -= first?.length || 0;
+  }
+}
+
+function appendPreRollSamples(samples) {
+  state.preRollSampleChunks.push(samples);
+  state.preRollSampleCount += samples.length;
+  trimPreRollSamples();
+}
+
+function appendSegmentSamples(samples) {
+  state.segmentSampleChunks.push(samples);
+  state.segmentSampleCount += samples.length;
+}
+
+function mergeFloat32Chunks(chunks, totalSamples = null) {
+  const length = totalSamples ?? chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+  const merged = new Float32Array(length);
+  let offset = 0;
+
+  for (const chunk of chunks) {
+    merged.set(chunk, offset);
+    offset += chunk.length;
+  }
+
+  return merged;
+}
+
+function writeStringToDataView(view, offset, value) {
+  for (let i = 0; i < value.length; i += 1) {
+    view.setUint8(offset + i, value.charCodeAt(i));
+  }
+}
+
+function createWavBlobFromFloat32(chunks, sampleRate) {
+  const samples = mergeFloat32Chunks(chunks);
+  const numChannels = 1;
+  const bytesPerSample = 2;
+  const blockAlign = numChannels * bytesPerSample;
+  const byteRate = sampleRate * blockAlign;
+  const dataSize = samples.length * bytesPerSample;
+  const buffer = new ArrayBuffer(44 + dataSize);
+  const view = new DataView(buffer);
+
+  writeStringToDataView(view, 0, 'RIFF');
+  view.setUint32(4, 36 + dataSize, true);
+  writeStringToDataView(view, 8, 'WAVE');
+  writeStringToDataView(view, 12, 'fmt ');
+  view.setUint32(16, 16, true); // PCM chunk size
+  view.setUint16(20, 1, true);  // PCM format
+  view.setUint16(22, numChannels, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, byteRate, true);
+  view.setUint16(32, blockAlign, true);
+  view.setUint16(34, 16, true); // 16-bit
+  writeStringToDataView(view, 36, 'data');
+  view.setUint32(40, dataSize, true);
+
+  let offset = 44;
+  for (let i = 0; i < samples.length; i += 1) {
+    const s = Math.max(-1, Math.min(1, samples[i]));
+    view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+    offset += 2;
+  }
+
+  return new Blob([buffer], { type: 'audio/wav' });
 }
 
 function startContinuousRecorder() {
   if (!state.micStream) return;
-  if (state.recorder && state.recorder.state !== 'inactive') return;
+  if (state.pcmCaptureReady) return;
 
-  const mimeType = getRecorderMimeType();
-  const recorder = new MediaRecorder(state.micStream, mimeType ? { mimeType } : undefined);
+  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextClass) {
+    throw new Error('このブラウザではAudioContextが使えません。');
+  }
 
-  state.preRollChunks = [];
-  state.segmentChunks = [];
+  if (!state.audioContext) state.audioContext = new AudioContextClass();
+  if (!state.micSource) state.micSource = state.audioContext.createMediaStreamSource(state.micStream);
+
+  state.sampleRate = state.audioContext.sampleRate || 48000;
+  state.preRollSampleChunks = [];
+  state.preRollSampleCount = 0;
+  state.segmentSampleChunks = [];
+  state.segmentSampleCount = 0;
   state.segmentClosing = false;
 
-  recorder.ondataavailable = (event) => {
-    if (!event.data || event.data.size <= 0) return;
+  // ScriptProcessorNodeは非推奨ですが、幅広いスマホブラウザで動きやすく、
+  // 今回の短い会話録音には十分です。MediaRecorderチャンク結合によるWebM破損を避ける目的です。
+  const processor = state.audioContext.createScriptProcessor(2048, 1, 1);
+  const zeroGain = state.audioContext.createGain();
+  zeroGain.gain.value = 0;
 
-    const now = performance.now();
-    const item = { blob: event.data, ts: now };
+  processor.onaudioprocess = (event) => {
+    const input = event.inputBuffer.getChannelData(0);
+    const copy = new Float32Array(input.length);
+    copy.set(input);
 
-    // 常に直近音声を保持。話し始め検知後、このpre-rollを録音セグメントの先頭に付けます。
-    state.preRollChunks.push(item);
-    trimPreRollChunks(now);
+    appendPreRollSamples(copy);
 
-    // 発話中または停止直後のflush中だけ、実際に送信するセグメントへ追加します。
     if (state.recording || state.segmentClosing) {
-      state.segmentChunks.push(item);
+      appendSegmentSamples(copy);
     }
   };
 
-  recorder.onerror = (event) => {
-    console.error('[continuous recorder error]', event);
-  };
+  state.micSource.connect(processor);
+  processor.connect(zeroGain);
+  zeroGain.connect(state.audioContext.destination);
 
-  recorder.onstop = () => {
-    // マイクが生きているのに止まった場合は、待機録音を復帰します。
-    if (state.liveStarted && state.micStream && state.micStream.active) {
-      try {
-        startContinuousRecorder();
-      } catch (error) {
-        console.warn('[continuous recorder restart failed]', error);
-      }
-    }
-  };
+  state.micProcessor = processor;
+  state.micZeroGain = zeroGain;
+  state.pcmCaptureReady = true;
 
-  state.recorder = recorder;
-  recorder.start(VAD.chunkMs);
-
-  console.info('[continuous recorder started]', {
-    mimeType: recorder.mimeType,
-    chunkMs: VAD.chunkMs,
-    preRollMs: VAD.preRollMs
+  console.info('[pcm recorder started]', {
+    sampleRate: state.sampleRate,
+    preRollMs: VAD.preRollMs,
+    preRollMaxSamples: getPreRollMaxSamples(),
+    outputMimeType: 'audio/wav'
   });
 }
 
@@ -1957,12 +2045,13 @@ function startSpeechSegment() {
   if (state.recording || state.busy || state.talking || !state.micStream) return;
   clearWaitingPrompt();
 
-  // 常時録音がまだ開始されていない場合に備えて開始します。
+  // 常時PCMキャプチャがまだ開始されていない場合に備えて開始します。
   startContinuousRecorder();
 
-  // 直近preRollMs分を先頭に含める。これで「鑑定士は」のような語頭欠けを防ぎます。
-  trimPreRollChunks();
-  state.segmentChunks = [...state.preRollChunks];
+  // 直近preRollMs分を先頭に含める。WAVで再生成するため、音声ファイルとして破損しません。
+  trimPreRollSamples();
+  state.segmentSampleChunks = state.preRollSampleChunks.map((chunk) => chunk.slice(0));
+  state.segmentSampleCount = state.segmentSampleChunks.reduce((sum, chunk) => sum + chunk.length, 0);
   state.recording = true;
   state.segmentClosing = false;
   state.recordStartedAt = performance.now();
@@ -1972,9 +2061,12 @@ function startSpeechSegment() {
   setSubtitle('お話を聞いています…');
 
   console.info('[speech segment started]', {
-    preRollChunks: state.preRollChunks.length,
+    preRollChunks: state.preRollSampleChunks.length,
+    preRollSamples: state.preRollSampleCount,
+    segmentSamples: state.segmentSampleCount,
     preRollMs: VAD.preRollMs,
-    rms: state.rms
+    rms: state.rms,
+    outputMimeType: 'audio/wav'
   });
 }
 
@@ -1989,30 +2081,27 @@ async function stopSpeechSegment() {
   state.segmentClosing = true;
   state.busy = true;
 
-  // 現在のバッファをできるだけ吐き出してからBlob化します。
-  try {
-    if (state.recorder && state.recorder.state === 'recording') {
-      state.recorder.requestData();
-    }
-  } catch (error) {
-    console.warn('[requestData failed]', error);
-  }
-
-  await delay(Math.max(80, Math.min(260, VAD.chunkMs + 40)));
+  // 最後の音を少しだけ取り込んでからWAV化します。
+  await delay(160);
   state.segmentClosing = false;
 
-  const chunks = state.segmentChunks.map((item) => item.blob).filter(Boolean);
-  state.segmentChunks = [];
-
-  const mimeType = state.recorder?.mimeType || getRecorderMimeType() || 'audio/webm';
-  const blob = new Blob(chunks, { type: mimeType });
+  const chunks = state.segmentSampleChunks.filter((chunk) => chunk && chunk.length > 0);
+  const sampleRate = state.sampleRate || state.audioContext?.sampleRate || 48000;
+  const blob = createWavBlobFromFloat32(chunks, sampleRate);
+  state.lastAudioBlob = blob;
 
   console.info('[speech segment stopped]', {
     blobSize: blob.size,
     chunks: chunks.length,
-    mimeType,
+    sampleRate,
+    samples: state.segmentSampleCount,
+    durationSec: Number((state.segmentSampleCount / sampleRate).toFixed(3)),
+    mimeType: blob.type,
     preRollMs: VAD.preRollMs
   });
+
+  state.segmentSampleChunks = [];
+  state.segmentSampleCount = 0;
 
   if (blob.size < VAD.minSegmentBytes) {
     state.lastSpeechEndedAt = performance.now();
@@ -2024,6 +2113,21 @@ async function stopSpeechSegment() {
 
   await sendAudio(blob);
 }
+
+window.downloadLastRecordedAudio = () => {
+  if (!state.lastAudioBlob) {
+    console.warn('[audio debug] no last audio blob');
+    return;
+  }
+  const url = URL.createObjectURL(state.lastAudioBlob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `avatar-recording-${Date.now()}.wav`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+};
 
 function blobToBase64(blob) {
   return new Promise((resolve, reject) => {
