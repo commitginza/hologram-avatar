@@ -5,7 +5,7 @@ const CONFIG = window.HOLOGRAM_CONFIG || {};
 const API_URL = CONFIG.API_URL || '';
 const MODEL_URL = CONFIG.MODEL_URL || 'https://watchimg.s3.ap-northeast-1.amazonaws.com/glb/avatar-v1.glb';
 
-const APP_BUILD = 'human-avatar-turn-only-v16-wav-preroll-20260712';
+const APP_BUILD = 'human-avatar-turn-only-v17-fast-wait-ux-20260712';
 window.APP_BUILD = APP_BUILD;
 console.info(`[app.js loaded] ${APP_BUILD}`, import.meta.url);
 
@@ -370,6 +370,8 @@ const state = {
   lastWaitingPromptAt: 0,
   lastSpeechEndedAt: 0,
   lastAnswerText: '',
+  responseWaitTimers: [],
+  responseWaitStartedAt: 0,
 };
 
 const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
@@ -2041,6 +2043,35 @@ function startContinuousRecorder() {
   });
 }
 
+
+function clearResponseWaitPrompts() {
+  for (const id of state.responseWaitTimers) {
+    clearTimeout(id);
+  }
+  state.responseWaitTimers = [];
+  state.responseWaitStartedAt = 0;
+}
+
+function scheduleResponseWaitPrompts() {
+  clearResponseWaitPrompts();
+  state.responseWaitStartedAt = performance.now();
+
+  // 通常会話やJSON固定回答は速く返る想定なので、すぐに「待ち」文言を出さない。
+  // 1.2秒以内に返れば、画面上はほぼ待ち表示なしで会話が続きます。
+  state.responseWaitTimers.push(setTimeout(() => {
+    if (!state.busy || state.talking || state.recording) return;
+    setStatus('thinking');
+    setSubtitle('内容を確認しています。');
+  }, 1200));
+
+  // Salesforce在庫確認など、長くなる場合だけ追加で丁寧な待機文へ切り替える。
+  state.responseWaitTimers.push(setTimeout(() => {
+    if (!state.busy || state.talking || state.recording) return;
+    setStatus('checking');
+    setSubtitle('只今、在庫や情報を確認していますので、今しばらくお待ちください。');
+  }, 3200));
+}
+
 function startSpeechSegment() {
   if (state.recording || state.busy || state.talking || !state.micStream) return;
   clearWaitingPrompt();
@@ -2075,11 +2106,13 @@ async function stopSpeechSegment() {
 
   clearWaitingPrompt();
   setStatus('thinking');
-  setSubtitle('ただいま内容を確認していますので、今しばらくお待ちください。');
+  // 通常会話はできるだけ待機文を出さずに返答へつなぐため、
+  // 待機文は遅延表示にします。
 
   state.recording = false;
   state.segmentClosing = true;
   state.busy = true;
+  scheduleResponseWaitPrompts();
 
   // 最後の音を少しだけ取り込んでからWAV化します。
   await delay(160);
@@ -2104,6 +2137,7 @@ async function stopSpeechSegment() {
   state.segmentSampleCount = 0;
 
   if (blob.size < VAD.minSegmentBytes) {
+    clearResponseWaitPrompts();
     state.lastSpeechEndedAt = performance.now();
     state.busy = false;
     setStatus('watching');
@@ -2165,9 +2199,13 @@ async function sendAudio(blob) {
       audio_base64: audioBase64,
       audio_mime_type: blob.type || 'audio/webm'
     });
+
+    // 応答が返ったら、遅延表示中の待機文を止めて回答表示/発話へ移る。
+    clearResponseWaitPrompts();
     setTranscript(data.transcript || '');
     await playTts(data.audio_base64, data.display_text || data.speak_text || '回答を生成しました。');
   } catch (error) {
+    clearResponseWaitPrompts();
     console.error(error);
     setStatus('error');
     setSubtitle(`エラー: ${error.message}`);
