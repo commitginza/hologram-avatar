@@ -5,6 +5,10 @@ const CONFIG = window.HOLOGRAM_CONFIG || {};
 const API_URL = CONFIG.API_URL || '';
 const MODEL_URL = CONFIG.MODEL_URL || 'https://watchimg.s3.ap-northeast-1.amazonaws.com/glb/avatar-v1.glb';
 
+const APP_BUILD = 'human-avatar-pose-skeleton-mouth-v3-20260712';
+window.APP_BUILD = APP_BUILD;
+console.info(`[app.js loaded] ${APP_BUILD}`, import.meta.url);
+
 // ===== Avatar / camera preset =====
 // 人型GLBに合わせて、Consoleから位置・角度・カメラ・再フィットを調整できます。
 // 例: window.setAvatarView({ yawDeg: 0, y: -0.6, z: -1.6, cameraZ: 9.5, targetHeight: 4.8 })
@@ -48,6 +52,7 @@ const MOUTH_OVERLAY = {
   enabled: true,
   visible: true,
   alwaysVisible: true,
+  hideWhenMouthBoneWorks: true,
 
   // root: 画面上の固定位置として重ねる / avatar: アバターグループに追従させる
   // まずは root 推奨。モデルの回転に合わせたい時だけ avatar を試してください。
@@ -112,6 +117,49 @@ const SKELETON = {
   mouthBoneName: '',
   mouthBoneAxis: 'x',
   mouthBoneOpenDeg: 8
+};
+
+// ===== Bone pose preset =====
+// 現在のGLBがT-poseの場合、腕を前へ下ろすための簡易Boneポーズです。
+// Boneのローカル軸はモデルごとに違うため、Consoleの window.setBoneRotation() で微調整してください。
+const BONE_POSE = {
+  enabled: true,
+  activePreset: 'handsFront',
+  autoApplyOnLoad: true,
+  stopAnimationOnApply: true,
+
+  presets: {
+    // まずの初期値。合わない場合はConsoleで各Boneのx/y/zを調整してください。
+    handsFront: {
+      // 肩を少し内側・下へ。T-poseの腕を下ろす目的。
+      L_Clavicle: { x: 0, y: 0, z: 5 },
+      R_Clavicle: { x: 0, y: 0, z: -5 },
+
+      // 上腕: T-poseから腕を下げ、少し前へ寄せる。
+      L_Upperarm: { x: 4, y: 0, z: 72 },
+      R_Upperarm: { x: 4, y: 0, z: -72 },
+
+      // 前腕: 肘を曲げて手を腹部〜股前へ寄せる。
+      L_Forearm: { x: 0, y: 26, z: 38 },
+      R_Forearm: { x: 0, y: -26, z: -38 },
+
+      // 手首: 手のひらを前・内側へ寄せる。
+      L_Hand: { x: 0, y: 0, z: 12 },
+      R_Hand: { x: 0, y: 0, z: -12 }
+    },
+
+    // 失敗時の代替。軸が合わないモデル向け。
+    handsFrontAlt: {
+      L_Clavicle: { x: 0, y: 6, z: 0 },
+      R_Clavicle: { x: 0, y: -6, z: 0 },
+      L_Upperarm: { x: 68, y: 0, z: 0 },
+      R_Upperarm: { x: 68, y: 0, z: 0 },
+      L_Forearm: { x: 40, y: 0, z: 0 },
+      R_Forearm: { x: 40, y: 0, z: 0 },
+      L_Hand: { x: 10, y: 0, z: 0 },
+      R_Hand: { x: 10, y: 0, z: 0 }
+    }
+  }
 };
 
 const VAD = {
@@ -437,6 +485,7 @@ window.getAvatarDebug = () => {
     MOUTH_OVERLAY: { ...MOUTH_OVERLAY },
     HOLOGRAM: { ...HOLOGRAM },
     SKELETON: { ...SKELETON },
+    BONE_POSE: JSON.parse(JSON.stringify(BONE_POSE)),
     skeleton: { boneCount: bones.length, animationCount: loadedAnimations.length, activeAnimation: activeAnimationAction?._clip?.name || null },
     bounds: getAvatarBounds()
   };
@@ -641,6 +690,12 @@ function collectSkeletonData(rootObject, animations = []) {
   if (SKELETON.autoPlay && loadedAnimations.length > 0) {
     const target = SKELETON.animationName || SKELETON.animationIndex || 0;
     playSkeletonAnimation(target);
+  }
+
+  if (BONE_POSE.enabled && BONE_POSE.autoApplyOnLoad) {
+    window.setTimeout(() => {
+      window.applyBonePose?.(BONE_POSE.activePreset, { resetFirst: true });
+    }, 0);
   }
 }
 
@@ -892,9 +947,171 @@ window.resetAllBones = () => {
   console.log('[bones reset all]', bones.length);
 };
 
+
+function applyBoneRotations(rotationMap = {}, options = {}) {
+  const resetFirst = options.resetFirst !== false;
+  const additive = !!options.additive;
+  const applied = [];
+  const missing = [];
+
+  if (resetFirst) {
+    for (const boneName of Object.keys(rotationMap)) {
+      const bone = findBone(boneName);
+      if (!bone) continue;
+      const original = originalBoneTransforms.get(bone.uuid);
+      if (original) {
+        bone.position.copy(original.position);
+        bone.rotation.copy(original.rotation);
+        bone.scale.copy(original.scale);
+      }
+    }
+  }
+
+  for (const [boneName, rotationDeg] of Object.entries(rotationMap)) {
+    const bone = findBone(boneName);
+    if (!bone) {
+      missing.push(boneName);
+      continue;
+    }
+
+    const rx = THREE.MathUtils.degToRad(Number(rotationDeg.x || 0));
+    const ry = THREE.MathUtils.degToRad(Number(rotationDeg.y || 0));
+    const rz = THREE.MathUtils.degToRad(Number(rotationDeg.z || 0));
+
+    if (!additive && !resetFirst) {
+      const original = originalBoneTransforms.get(bone.uuid);
+      if (original) bone.rotation.copy(original.rotation);
+    }
+
+    bone.rotation.x += rx;
+    bone.rotation.y += ry;
+    bone.rotation.z += rz;
+    bone.updateMatrixWorld(true);
+
+    applied.push({
+      name: bone.name,
+      rotationDeg: {
+        x: THREE.MathUtils.radToDeg(bone.rotation.x),
+        y: THREE.MathUtils.radToDeg(bone.rotation.y),
+        z: THREE.MathUtils.radToDeg(bone.rotation.z)
+      }
+    });
+  }
+
+  if (applied.length) console.table(applied);
+  if (missing.length) console.warn('[pose missing bones]', missing);
+  return { applied, missing };
+}
+
+window.applyBonePose = (presetName = BONE_POSE.activePreset, options = {}) => {
+  const preset = typeof presetName === 'string' ? BONE_POSE.presets[presetName] : presetName;
+  if (!preset) {
+    console.warn('[bone pose] preset not found:', presetName, Object.keys(BONE_POSE.presets));
+    return null;
+  }
+
+  if (options.stopAnimation !== false && BONE_POSE.stopAnimationOnApply) {
+    window.stopSkeletonAnimation?.();
+  }
+
+  const result = applyBoneRotations(preset, {
+    resetFirst: options.resetFirst !== false,
+    additive: !!options.additive
+  });
+
+  BONE_POSE.activePreset = typeof presetName === 'string' ? presetName : 'custom';
+  console.log('[bone pose applied]', BONE_POSE.activePreset, result);
+  return result;
+};
+
+window.applyHandsFrontPose = (options = {}) => window.applyBonePose('handsFront', options);
+window.applyHandsFrontAltPose = (options = {}) => window.applyBonePose('handsFrontAlt', options);
+
+window.setBonePosePreset = (name, preset) => {
+  if (!name || !preset || typeof preset !== 'object') {
+    console.warn('Usage: window.setBonePosePreset("myPose", { L_Upperarm:{x:0,y:0,z:70}, ... })');
+    return;
+  }
+  BONE_POSE.presets[name] = preset;
+  console.log('[bone pose preset saved]', name, preset);
+};
+
+window.getCurrentBoneRotations = (names = []) => {
+  const targetNames = names.length ? names : [
+    'L_Clavicle', 'L_Upperarm', 'L_Forearm', 'L_Hand',
+    'R_Clavicle', 'R_Upperarm', 'R_Forearm', 'R_Hand'
+  ];
+
+  const result = {};
+  for (const name of targetNames) {
+    const bone = findBone(name);
+    if (!bone) continue;
+    const original = originalBoneTransforms.get(bone.uuid);
+    const rx = original ? bone.rotation.x - original.rotation.x : bone.rotation.x;
+    const ry = original ? bone.rotation.y - original.rotation.y : bone.rotation.y;
+    const rz = original ? bone.rotation.z - original.rotation.z : bone.rotation.z;
+    result[bone.name] = {
+      x: Number(THREE.MathUtils.radToDeg(rx).toFixed(3)),
+      y: Number(THREE.MathUtils.radToDeg(ry).toFixed(3)),
+      z: Number(THREE.MathUtils.radToDeg(rz).toFixed(3))
+    };
+  }
+  console.log('[current bone rotations relative to original]', result);
+  return result;
+};
+
+window.setMouthBone = (config = {}) => {
+  Object.assign(SKELETON, {
+    mouthBoneEnabled: true,
+    ...config
+  });
+
+  const bone = findMouthBone();
+  if (!bone) {
+    console.warn('[mouth bone] jaw/mouth系Boneが見つかりません。現在の骨一覧ではBone口パクは使えない可能性が高いです。overlayを使います。', SKELETON);
+    return null;
+  }
+
+  console.log('[mouth bone enabled]', bone.name, SKELETON);
+  return bone;
+};
+
+window.disableMouthBone = () => {
+  SKELETON.mouthBoneEnabled = false;
+  console.log('[mouth bone disabled] overlay fallback only.');
+};
+
+window.inspectMouthCapability = () => {
+  const candidates = bones.filter((bone) => /jaw|mouth|chin|lip|mandible|口|顎|あご/i.test(bone.name || ''))
+    .map((bone) => ({ name: bone.name, parent: bone.parent?.name || null }));
+  const morphs = [];
+  if (avatarRoot) {
+    avatarRoot.traverse((child) => {
+      if (!child.isMesh || !child.morphTargetDictionary) return;
+      morphs.push({ name: child.name, morphTargetDictionary: child.morphTargetDictionary });
+    });
+  }
+  const result = { mouthBoneCandidates: candidates, morphTargets: morphs, overlayEnabled: MOUTH_OVERLAY.enabled };
+  console.log('[mouth capability]', result);
+  return result;
+};
+
 function findMouthBone() {
+  // Headは口ではないので自動候補から除外します。
+  // 口パク用Boneが無い場合はoverlayへフォールバックします。
   if (SKELETON.mouthBoneName) return findBone(SKELETON.mouthBoneName);
-  return findBone('jaw') || findBone('mouth') || findBone('head') || null;
+
+  const candidates = [
+    'jaw', 'mouth', 'chin', 'lowerjaw', 'lower_jaw', 'mandible',
+    'lip', 'lowerlip', 'lower_lip', '口', '顎', 'あご'
+  ];
+
+  for (const name of candidates) {
+    const bone = findBone(name);
+    if (bone) return bone;
+  }
+
+  return null;
 }
 
 function applySkeletonMouth(open) {
@@ -1426,8 +1643,18 @@ function updateMouth(delta, elapsed) {
     setMorph(['mouthFunnel', 'mouthPucker'], open * 0.18);
   }
 
+  const beforeBone = findMouthBone();
   applySkeletonMouth(open);
-  updateMouthOverlay(open, elapsed);
+
+  // Bone口パクが有効で実際のmouth/jaw系Boneが見つかっている場合は、オーバーレイを閉じる/非表示にできます。
+  // ただし現在のGLBにjaw/mouth系Boneが無い場合は、オーバーレイにフォールバックします。
+  if (SKELETON.mouthBoneEnabled && beforeBone && MOUTH_OVERLAY.hideWhenMouthBoneWorks !== false) {
+    updateMouthOverlay(0, elapsed);
+    if (mouthOverlay) mouthOverlay.visible = false;
+  } else {
+    if (mouthOverlay) mouthOverlay.visible = !!MOUTH_OVERLAY.enabled && !!MOUTH_OVERLAY.visible;
+    updateMouthOverlay(open, elapsed);
+  }
 }
 
 async function detectPerson(now) {
@@ -1583,6 +1810,51 @@ function animate() {
   renderer.render(scene, camera);
   requestAnimationFrame(animate);
 }
+
+
+window.checkAvatarConsoleFunctions = () => {
+  const names = [
+    'APP_BUILD',
+    'setAvatarView',
+    'getAvatarDebug',
+    'copyAvatarSettings',
+    'setMouthOverlay',
+    'previewMouth',
+    'showMouthOverlay',
+    'setHologram',
+    'toggleHologram',
+    'inspectSkeleton',
+    'listBones',
+    'listAnimations',
+    'showSkeletonHelper',
+    'applyHandsFrontPose',
+    'applyHandsFrontAltPose',
+    'setBonePosePreset',
+    'getCurrentBoneRotations',
+    'setMouthBone',
+    'disableMouthBone',
+    'inspectMouthCapability',
+    'playSkeletonAnimation',
+    'stopSkeletonAnimation',
+    'pauseSkeletonAnimation',
+    'setAnimationTimeScale',
+    'setBoneRotation',
+    'resetBone',
+    'resetAllBones'
+  ];
+  const result = Object.fromEntries(names.map((name) => [name, typeof window[name]]));
+  console.table(result);
+  console.log('[app build]', window.APP_BUILD);
+  return result;
+};
+
+console.info('[avatar console ready]', {
+  build: window.APP_BUILD,
+  inspectSkeleton: typeof window.inspectSkeleton,
+  listBones: typeof window.listBones,
+  listAnimations: typeof window.listAnimations,
+  showSkeletonHelper: typeof window.showSkeletonHelper
+});
 
 setStatus('loading');
 loadAvatar().catch((error) => {
