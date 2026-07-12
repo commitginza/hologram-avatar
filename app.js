@@ -5,7 +5,7 @@ const CONFIG = window.HOLOGRAM_CONFIG || {};
 const API_URL = CONFIG.API_URL || '';
 const MODEL_URL = CONFIG.MODEL_URL || 'https://watchimg.s3.ap-northeast-1.amazonaws.com/glb/avatar-v1.glb';
 
-const APP_BUILD = 'human-avatar-skeleton-display-v9-neutral-skeleton-20260712';
+const APP_BUILD = 'human-avatar-textured-hologram-v10-20260712';
 window.APP_BUILD = APP_BUILD;
 console.info(`[app.js loaded] ${APP_BUILD}`, import.meta.url);
 
@@ -97,17 +97,21 @@ const HOLOGRAM = {
 };
 
 // ===== Model display preset =====
-// GLBのSkeleton/Boneは「骨組み」で、色や質感はMaterialで決まります。
-// そのため、色付きGLBを避けたい場合は、Materialを中立色に差し替えつつSkeletonHelperを表示します。
+// Skeleton/Boneは骨組みで、見た目の色や質感はMaterialで決まります。
+// Tripo/GLBビューアにある「ホログラムっぽい表示」は、元テクスチャを使いつつ透明度・発光・色味を変えたMaterial表示です。
 // mode:
-//   original         : GLB本来の色付きMaterial
-//   neutral         : 色を消した中立マテリアル
-//   neutralSkeleton : 中立マテリアル + SkeletonHelper
-//   skeleton        : メッシュを非表示にしてSkeletonHelperだけ表示
-//   wireframeSkeleton: ワイヤーフレーム + SkeletonHelper
+//   original          : GLB本来の色付きMaterial
+//   texturedHologram  : 元テクスチャを残したホログラム風Material
+//   neutral           : 色を消した中立マテリアル
+//   neutralSkeleton   : 中立マテリアル + SkeletonHelper
+//   skeleton          : メッシュを非表示にしてSkeletonHelperだけ表示
+//   wireframeSkeleton : ワイヤーフレーム + SkeletonHelper
 const MODEL_DISPLAY = {
-  mode: 'neutralSkeleton',
-  showSkeletonHelper: true,
+  // 初期表示は「元テクスチャありのホログラム風」にします。
+  mode: 'texturedHologram',
+  showSkeletonHelper: false,
+
+  // neutral / skeleton系表示用
   neutralColor: 0xe7edf0,
   neutralEmissive: 0x000000,
   neutralOpacity: 1.0,
@@ -115,7 +119,20 @@ const MODEL_DISPLAY = {
   metalness: 0.02,
   wireframe: false,
   depthWrite: true,
-  side: 'front' // front / double
+  side: 'front', // front / double
+
+  // texturedHologram用。元テクスチャを残しながらホログラム風にする設定です。
+  texturedOpacity: 0.58,
+  texturedTalkOpacityBoost: 0.10,
+  texturedTint: 0xdffcff,
+  texturedEmissive: 0x78f4ff,
+  texturedEmissiveIntensity: 0.12,
+  texturedEmissiveTalkBoost: 0.08,
+  texturedRoughness: 0.36,
+  texturedMetalness: 0.0,
+  texturedDepthWrite: false,
+  texturedSide: 'front', // front / double
+  texturedBlending: 'normal' // normal / additive
 };
 
 // ===== Skeleton / animation preset =====
@@ -481,6 +498,62 @@ function buildNeutralDisplayMaterial(mode = MODEL_DISPLAY.mode) {
   });
 }
 
+
+function buildTexturedHologramMaterial(child) {
+  const original = originalAvatarMaterials.get(child) || child.material;
+  const source = Array.isArray(original) ? original[0] : original;
+  const tint = new THREE.Color(MODEL_DISPLAY.texturedTint);
+
+  const material = new THREE.MeshPhysicalMaterial({
+    // mapを残すことで、GLB本来のテクスチャを見せます。
+    map: source?.map || null,
+    normalMap: source?.normalMap || null,
+    roughnessMap: source?.roughnessMap || null,
+    metalnessMap: source?.metalnessMap || null,
+    aoMap: source?.aoMap || null,
+    alphaMap: source?.alphaMap || null,
+
+    color: tint,
+    roughness: source?.roughness ?? MODEL_DISPLAY.texturedRoughness,
+    metalness: source?.metalness ?? MODEL_DISPLAY.texturedMetalness,
+    transparent: true,
+    opacity: MODEL_DISPLAY.texturedOpacity,
+    emissive: MODEL_DISPLAY.texturedEmissive,
+    emissiveIntensity: MODEL_DISPLAY.texturedEmissiveIntensity,
+    depthWrite: MODEL_DISPLAY.texturedDepthWrite,
+    depthTest: true,
+    side: MODEL_DISPLAY.texturedSide === 'double' ? THREE.DoubleSide : THREE.FrontSide,
+    blending: MODEL_DISPLAY.texturedBlending === 'additive' ? THREE.AdditiveBlending : THREE.NormalBlending
+  });
+
+  material.name = 'textured-hologram-material';
+  return material;
+}
+
+function getTexturedHologramMaterialFor(child) {
+  const original = originalAvatarMaterials.get(child) || child.material;
+  const source = Array.isArray(original) ? original[0] : original;
+  const key = [
+    'texturedHologramMaterial',
+    source?.uuid || 'no-source',
+    MODEL_DISPLAY.texturedOpacity,
+    MODEL_DISPLAY.texturedTint,
+    MODEL_DISPLAY.texturedEmissive,
+    MODEL_DISPLAY.texturedEmissiveIntensity,
+    MODEL_DISPLAY.texturedRoughness,
+    MODEL_DISPLAY.texturedMetalness,
+    MODEL_DISPLAY.texturedDepthWrite,
+    MODEL_DISPLAY.texturedSide,
+    MODEL_DISPLAY.texturedBlending
+  ].join(':');
+
+  if (!child.userData[key]) {
+    child.userData[key] = buildTexturedHologramMaterial(child);
+  }
+
+  return child.userData[key];
+}
+
 function getNeutralMaterialFor(child, modeName) {
   const key = [
     'displayMaterial',
@@ -505,6 +578,13 @@ function applyModelDisplayToMesh(child) {
     child.visible = true;
     child.material = originalAvatarMaterials.get(child) || child.material;
     child.renderOrder = 0;
+    return;
+  }
+
+  if (modeName === 'texturedhologram' || modeName === 'texturehologram' || modeName === 'hologramtexture') {
+    child.visible = true;
+    child.material = getTexturedHologramMaterialFor(child);
+    child.renderOrder = 1;
     return;
   }
 
@@ -574,18 +654,42 @@ function setHologramEnabled(enabled = true, shouldLog = true) {
 }
 
 function updateHologramMaterials(elapsed = 0) {
-  if (!HOLOGRAM.enabled || !HOLOGRAM.useMaterial) return;
-
-  for (const mat of avatarMaterials) {
-    mat.transparent = true;
-    mat.depthWrite = false;
-    mat.opacity =
-      HOLOGRAM.materialOpacity +
-      state.talkLevel * HOLOGRAM.materialTalkOpacityBoost +
-      (HOLOGRAM.useFlicker ? Math.sin(elapsed * 5.5) * state.talkLevel * HOLOGRAM.materialFlickerAmount : 0);
-    mat.emissiveIntensity = HOLOGRAM.emissiveIntensity + state.talkLevel * HOLOGRAM.emissiveTalkBoost;
-    mat.needsUpdate = true;
+  // 純ホログラムMaterialモード。元テクスチャは使いません。
+  if (HOLOGRAM.enabled && HOLOGRAM.useMaterial) {
+    for (const mat of avatarMaterials) {
+      mat.transparent = true;
+      mat.depthWrite = false;
+      mat.opacity =
+        HOLOGRAM.materialOpacity +
+        state.talkLevel * HOLOGRAM.materialTalkOpacityBoost +
+        (HOLOGRAM.useFlicker ? Math.sin(elapsed * 5.5) * state.talkLevel * HOLOGRAM.materialFlickerAmount : 0);
+      mat.emissiveIntensity = HOLOGRAM.emissiveIntensity + state.talkLevel * HOLOGRAM.emissiveTalkBoost;
+      mat.needsUpdate = true;
+    }
+    return;
   }
+
+  // 元テクスチャを残したホログラム風Materialモード。
+  const modelModeName = String(MODEL_DISPLAY.mode || '').toLowerCase();
+  const isTexturedHologram =
+    modelModeName === 'texturedhologram' ||
+    modelModeName === 'texturehologram' ||
+    modelModeName === 'hologramtexture';
+
+  if (!isTexturedHologram || !avatarRoot) return;
+
+  avatarRoot.traverse((child) => {
+    if (!child.isMesh || !child.material) return;
+    const materials = Array.isArray(child.material) ? child.material : [child.material];
+    for (const mat of materials) {
+      if (mat.name !== 'textured-hologram-material') continue;
+      mat.transparent = true;
+      mat.depthWrite = MODEL_DISPLAY.texturedDepthWrite;
+      mat.opacity = MODEL_DISPLAY.texturedOpacity + state.talkLevel * MODEL_DISPLAY.texturedTalkOpacityBoost;
+      mat.emissiveIntensity = MODEL_DISPLAY.texturedEmissiveIntensity + state.talkLevel * MODEL_DISPLAY.texturedEmissiveTalkBoost;
+      mat.needsUpdate = true;
+    }
+  });
 }
 
 function updateCameraView() {
@@ -706,6 +810,8 @@ window.setModelDisplayMode = (modeOrPatch = 'neutralSkeleton', patch = {}) => {
 };
 
 window.showOriginalGlbColors = () => window.setModelDisplayMode('original', { showSkeletonHelper: false });
+window.showTexturedHologram = (patch = {}) => window.setModelDisplayMode('texturedHologram', { showSkeletonHelper: false, ...patch });
+window.showTextureHologram = window.showTexturedHologram;
 window.showNeutralModel = () => window.setModelDisplayMode('neutral', { showSkeletonHelper: false, wireframe: false, neutralOpacity: 1 });
 window.showNeutralSkeleton = () => window.setModelDisplayMode('neutralSkeleton', { showSkeletonHelper: true, wireframe: false, neutralOpacity: 1 });
 window.showSkeletonView = () => window.setModelDisplayMode('skeleton', { showSkeletonHelper: true });
@@ -2090,6 +2196,7 @@ window.checkAvatarConsoleFunctions = () => {
     'toggleHologram',
     'setModelDisplayMode',
     'showOriginalGlbColors',
+    'showTexturedHologram',
     'showNeutralModel',
     'showNeutralSkeleton',
     'showSkeletonView',
