@@ -5,7 +5,7 @@ const CONFIG = window.HOLOGRAM_CONFIG || {};
 const API_URL = CONFIG.API_URL || '';
 const MODEL_URL = CONFIG.MODEL_URL || 'https://watchimg.s3.ap-northeast-1.amazonaws.com/glb/avatar-v1.glb';
 
-const APP_BUILD = 'human-avatar-turn-only-v13-original-colors-20260712';
+const APP_BUILD = 'human-avatar-turn-only-v14-vad-preroll-20260712';
 window.APP_BUILD = APP_BUILD;
 console.info(`[app.js loaded] ${APP_BUILD}`, import.meta.url);
 
@@ -241,11 +241,16 @@ const BONE_POSE = {
 };
 
 const VAD = {
-  startThreshold: 0.040,
-  stopThreshold: 0.022,
+  // 声を検知してから録音を開始すると、語頭が欠けます。
+  // そのため、待機中もMediaRecorderを常時回して直近音声をpre-rollとして保持します。
+  startThreshold: 0.035,
+  stopThreshold: 0.020,
   silenceMs: 1050,
   minRecordMs: 450,
-  maxRecordMs: 9000
+  maxRecordMs: 9000,
+  preRollMs: 1400,
+  chunkMs: 200,
+  minSegmentBytes: 900
 };
 
 const PERSON = {
@@ -296,7 +301,15 @@ const state = {
   mediaReady: false,
   videoStream: null,
   micStream: null,
+
+  // 常時録音用MediaRecorder。
+  // VADで話し始めを検知した時、直近preRollMs分の音声を先頭に付けることで語頭欠けを防ぎます。
   recorder: null,
+  preRollChunks: [],
+  segmentChunks: [],
+  segmentClosing: false,
+
+  // 後方互換用。実際の録音セグメントはsegmentChunksを使います。
   chunks: [],
   recording: false,
   busy: false,
@@ -447,6 +460,16 @@ window.setWaitingPrompt = (patch = {}) => {
 window.showWaitingPrompt = (text = '') => {
   showWaitingPrompt('ready', text || WAITING.readyText);
 };
+
+// VAD/録音検知の調整用。
+// 例: window.setVad({ startThreshold: 0.028, preRollMs: 1800 })
+window.setVad = (patch = {}) => {
+  Object.assign(VAD, patch);
+  console.log('[vad]', VAD);
+  return VAD;
+};
+
+window.getVad = () => ({ ...VAD });
 
 function resize() {
   const width = stage.clientWidth;
@@ -1842,40 +1865,137 @@ function updateRms() {
   return state.rms;
 }
 
+function delay(ms) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function trimPreRollChunks(now = performance.now()) {
+  const cutoff = now - VAD.preRollMs;
+  state.preRollChunks = state.preRollChunks.filter((item) => item.ts >= cutoff);
+}
+
+function startContinuousRecorder() {
+  if (!state.micStream) return;
+  if (state.recorder && state.recorder.state !== 'inactive') return;
+
+  const mimeType = getRecorderMimeType();
+  const recorder = new MediaRecorder(state.micStream, mimeType ? { mimeType } : undefined);
+
+  state.preRollChunks = [];
+  state.segmentChunks = [];
+  state.segmentClosing = false;
+
+  recorder.ondataavailable = (event) => {
+    if (!event.data || event.data.size <= 0) return;
+
+    const now = performance.now();
+    const item = { blob: event.data, ts: now };
+
+    // 常に直近音声を保持。話し始め検知後、このpre-rollを録音セグメントの先頭に付けます。
+    state.preRollChunks.push(item);
+    trimPreRollChunks(now);
+
+    // 発話中または停止直後のflush中だけ、実際に送信するセグメントへ追加します。
+    if (state.recording || state.segmentClosing) {
+      state.segmentChunks.push(item);
+    }
+  };
+
+  recorder.onerror = (event) => {
+    console.error('[continuous recorder error]', event);
+  };
+
+  recorder.onstop = () => {
+    // マイクが生きているのに止まった場合は、待機録音を復帰します。
+    if (state.liveStarted && state.micStream && state.micStream.active) {
+      try {
+        startContinuousRecorder();
+      } catch (error) {
+        console.warn('[continuous recorder restart failed]', error);
+      }
+    }
+  };
+
+  state.recorder = recorder;
+  recorder.start(VAD.chunkMs);
+
+  console.info('[continuous recorder started]', {
+    mimeType: recorder.mimeType,
+    chunkMs: VAD.chunkMs,
+    preRollMs: VAD.preRollMs
+  });
+}
+
 function startSpeechSegment() {
   if (state.recording || state.busy || state.talking || !state.micStream) return;
   clearWaitingPrompt();
-  const mimeType = getRecorderMimeType();
-  const recorder = new MediaRecorder(state.micStream, mimeType ? { mimeType } : undefined);
-  state.chunks = [];
-  recorder.ondataavailable = (event) => {
-    if (event.data && event.data.size > 0) state.chunks.push(event.data);
-  };
-  recorder.onstop = async () => {
-    const blob = new Blob(state.chunks, { type: recorder.mimeType || 'audio/webm' });
-    if (blob.size < 900) {
-      state.recording = false;
-      state.lastSpeechEndedAt = performance.now();
-      return;
-    }
-    state.recording = false;
-    await sendAudio(blob);
-  };
-  state.recorder = recorder;
+
+  // 常時録音がまだ開始されていない場合に備えて開始します。
+  startContinuousRecorder();
+
+  // 直近preRollMs分を先頭に含める。これで「鑑定士は」のような語頭欠けを防ぎます。
+  trimPreRollChunks();
+  state.segmentChunks = [...state.preRollChunks];
   state.recording = true;
+  state.segmentClosing = false;
   state.recordStartedAt = performance.now();
   state.lastVoiceAt = performance.now();
+
   setStatus('listening');
   setSubtitle('お話を聞いています…');
-  recorder.start(250);
+
+  console.info('[speech segment started]', {
+    preRollChunks: state.preRollChunks.length,
+    preRollMs: VAD.preRollMs,
+    rms: state.rms
+  });
 }
 
-function stopSpeechSegment() {
-  if (!state.recorder || !state.recording || state.recorder.state === 'inactive') return;
+async function stopSpeechSegment() {
+  if (!state.recording) return;
+
   clearWaitingPrompt();
   setStatus('thinking');
-  setSubtitle('少々お待ちください。');
-  state.recorder.stop();
+  setSubtitle('ただいま内容を確認していますので、今しばらくお待ちください。');
+
+  state.recording = false;
+  state.segmentClosing = true;
+  state.busy = true;
+
+  // 現在のバッファをできるだけ吐き出してからBlob化します。
+  try {
+    if (state.recorder && state.recorder.state === 'recording') {
+      state.recorder.requestData();
+    }
+  } catch (error) {
+    console.warn('[requestData failed]', error);
+  }
+
+  await delay(Math.max(80, Math.min(260, VAD.chunkMs + 40)));
+  state.segmentClosing = false;
+
+  const chunks = state.segmentChunks.map((item) => item.blob).filter(Boolean);
+  state.segmentChunks = [];
+
+  const mimeType = state.recorder?.mimeType || getRecorderMimeType() || 'audio/webm';
+  const blob = new Blob(chunks, { type: mimeType });
+
+  console.info('[speech segment stopped]', {
+    blobSize: blob.size,
+    chunks: chunks.length,
+    mimeType,
+    preRollMs: VAD.preRollMs
+  });
+
+  if (blob.size < VAD.minSegmentBytes) {
+    state.lastSpeechEndedAt = performance.now();
+    state.busy = false;
+    setStatus('watching');
+    showWaitingPrompt('ready');
+    return;
+  }
+
+  await sendAudio(blob);
 }
 
 function blobToBase64(blob) {
@@ -2084,6 +2204,7 @@ async function startLiveMode() {
     videoEl.srcObject = state.videoStream;
     await videoEl.play();
     setupMicAnalyser(state.micStream);
+    startContinuousRecorder();
 
     if ('FaceDetector' in window) {
       try { state.faceDetector = new FaceDetector({ fastMode: true, maxDetectedFaces: 1 }); } catch (_) { state.faceDetector = null; }
