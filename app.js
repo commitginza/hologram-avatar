@@ -91,6 +91,29 @@ const HOLOGRAM = {
   emissiveTalkBoost: 0.065
 };
 
+// ===== Skeleton / animation preset =====
+// GLBにSkeleton/Bone/Animationが含まれている場合だけ有効です。
+// Consoleで window.inspectSkeleton(), window.playSkeletonAnimation(0), window.showSkeletonHelper(true) などが使えます。
+const SKELETON = {
+  enabled: true,
+  autoPlay: false,
+  animationIndex: 0,
+  animationName: '',
+  timeScale: 1.0,
+  loop: 'repeat', // repeat / once / pingpong
+  clampWhenFinished: false,
+  showHelper: false,
+  helperColor: 0x88eeff,
+  logOnLoad: true,
+
+  // mouthBoneEnabled=true にすると、jaw/mouth/head系Boneを口パクに連動させます。
+  // Bone名がモデルによって違うため、まず window.listBones() で確認してください。
+  mouthBoneEnabled: false,
+  mouthBoneName: '',
+  mouthBoneAxis: 'x',
+  mouthBoneOpenDeg: 8
+};
+
 const VAD = {
   startThreshold: 0.040,
   stopThreshold: 0.022,
@@ -156,7 +179,9 @@ const state = {
   lastProbeAt: 0,
   previousFrame: null,
   faceDetector: null,
-  sessionId: crypto.randomUUID?.() || String(Date.now())
+  sessionId: crypto.randomUUID?.() || String(Date.now()),
+
+  skeletonPaused: false
 };
 
 const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
@@ -198,6 +223,15 @@ let mouthRim = null;
 let mouthMorphMesh = null;
 let mouthMorphDict = null;
 let mouthMorphInfluences = null;
+
+let animationMixer = null;
+let animationActions = [];
+let activeAnimationAction = null;
+let skeletonHelpers = [];
+let bones = [];
+let bonesByName = new Map();
+let originalBoneTransforms = new Map();
+let loadedAnimations = [];
 
 scene.add(new THREE.AmbientLight(0xffffff, 0.85));
 const key = new THREE.DirectionalLight(0xffffff, 2.0);
@@ -402,6 +436,8 @@ window.getAvatarDebug = () => {
     AVATAR_VIEW: { ...AVATAR_VIEW },
     MOUTH_OVERLAY: { ...MOUTH_OVERLAY },
     HOLOGRAM: { ...HOLOGRAM },
+    SKELETON: { ...SKELETON },
+    skeleton: { boneCount: bones.length, animationCount: loadedAnimations.length, activeAnimation: activeAnimationAction?._clip?.name || null },
     bounds: getAvatarBounds()
   };
   console.log('[avatar debug]', debug);
@@ -412,7 +448,8 @@ window.copyAvatarSettings = async () => {
   const settings = {
     AVATAR_VIEW,
     MOUTH_OVERLAY,
-    HOLOGRAM
+    HOLOGRAM,
+    SKELETON
   };
   const text = JSON.stringify(settings, null, 2);
   console.log(text);
@@ -482,6 +519,17 @@ window.applyHumanPreset = () => {
     emissiveIntensity: 0.018,
     emissiveTalkBoost: 0.065
   });
+
+  window.setSkeleton({
+    enabled: true,
+    autoPlay: false,
+    animationIndex: 0,
+    animationName: '',
+    timeScale: 1,
+    loop: 'repeat',
+    clampWhenFinished: false,
+    showHelper: false
+  });
 };
 
 window.applyFacePreset = () => {
@@ -519,6 +567,347 @@ window.applyFacePreset = () => {
     moveDownWhileOpen: 0.025
   });
 };
+
+
+function getLoopMode(loopName) {
+  const value = String(loopName || '').toLowerCase();
+  if (value === 'once') return THREE.LoopOnce;
+  if (value === 'pingpong' || value === 'ping_pong') return THREE.LoopPingPong;
+  return THREE.LoopRepeat;
+}
+
+function collectSkeletonData(rootObject, animations = []) {
+  bones = [];
+  bonesByName = new Map();
+  originalBoneTransforms = new Map();
+  skeletonHelpers.forEach((helper) => {
+    if (helper.parent) helper.parent.remove(helper);
+    helper.dispose?.();
+  });
+  skeletonHelpers = [];
+
+  rootObject.traverse((child) => {
+    if (child.isBone) {
+      bones.push(child);
+      if (child.name) bonesByName.set(child.name, child);
+      originalBoneTransforms.set(child.uuid, {
+        position: child.position.clone(),
+        rotation: child.rotation.clone(),
+        scale: child.scale.clone()
+      });
+    }
+  });
+
+  loadedAnimations = animations || [];
+
+  if (loadedAnimations.length > 0) {
+    animationMixer = new THREE.AnimationMixer(rootObject);
+    animationActions = loadedAnimations.map((clip) => {
+      const action = animationMixer.clipAction(clip);
+      action.enabled = true;
+      action.clampWhenFinished = !!SKELETON.clampWhenFinished;
+      action.setLoop(getLoopMode(SKELETON.loop), Infinity);
+      return action;
+    });
+  } else {
+    animationMixer = null;
+    animationActions = [];
+    activeAnimationAction = null;
+  }
+
+  if (SKELETON.showHelper) showSkeletonHelper(true);
+
+  if (SKELETON.logOnLoad) {
+    console.group('[skeleton]');
+    console.log({
+      boneCount: bones.length,
+      animationCount: loadedAnimations.length,
+      animations: loadedAnimations.map((clip, index) => ({
+        index,
+        name: clip.name,
+        duration: clip.duration,
+        tracks: clip.tracks?.length || 0
+      })),
+      bones: bones.map((bone, index) => ({
+        index,
+        name: bone.name,
+        parent: bone.parent?.name || null,
+        children: bone.children?.map((c) => c.name).filter(Boolean) || []
+      }))
+    });
+    console.groupEnd();
+  }
+
+  if (SKELETON.autoPlay && loadedAnimations.length > 0) {
+    const target = SKELETON.animationName || SKELETON.animationIndex || 0;
+    playSkeletonAnimation(target);
+  }
+}
+
+function findBone(query) {
+  if (!query && query !== 0) return null;
+  if (typeof query === 'number') return bones[query] || null;
+
+  const q = String(query).toLowerCase();
+  if (bonesByName.has(query)) return bonesByName.get(query);
+
+  return bones.find((bone) => String(bone.name || '').toLowerCase() === q)
+    || bones.find((bone) => String(bone.name || '').toLowerCase().includes(q))
+    || null;
+}
+
+function findAnimation(target) {
+  if (!loadedAnimations.length) return { clip: null, index: -1 };
+
+  if (typeof target === 'number') {
+    const index = Math.max(0, Math.min(loadedAnimations.length - 1, Math.floor(target)));
+    return { clip: loadedAnimations[index], index };
+  }
+
+  const q = String(target || '').toLowerCase();
+  const index = loadedAnimations.findIndex((clip) => String(clip.name || '').toLowerCase() === q);
+  if (index >= 0) return { clip: loadedAnimations[index], index };
+
+  const partial = loadedAnimations.findIndex((clip) => String(clip.name || '').toLowerCase().includes(q));
+  if (partial >= 0) return { clip: loadedAnimations[partial], index: partial };
+
+  return { clip: loadedAnimations[0], index: 0 };
+}
+
+window.inspectSkeleton = () => {
+  const summary = {
+    skeletonEnabled: SKELETON.enabled,
+    boneCount: bones.length,
+    animationCount: loadedAnimations.length,
+    activeAnimation: activeAnimationAction?._clip?.name || null,
+    animations: loadedAnimations.map((clip, index) => ({
+      index,
+      name: clip.name,
+      duration: clip.duration,
+      tracks: clip.tracks?.length || 0
+    })),
+    bones: bones.map((bone, index) => ({
+      index,
+      name: bone.name,
+      parent: bone.parent?.name || null,
+      position: { x: bone.position.x, y: bone.position.y, z: bone.position.z },
+      rotationDeg: {
+        x: THREE.MathUtils.radToDeg(bone.rotation.x),
+        y: THREE.MathUtils.radToDeg(bone.rotation.y),
+        z: THREE.MathUtils.radToDeg(bone.rotation.z)
+      }
+    }))
+  };
+  console.log('[skeleton inspect]', summary);
+  return summary;
+};
+
+window.listBones = () => {
+  const list = bones.map((bone, index) => ({
+    index,
+    name: bone.name,
+    parent: bone.parent?.name || null,
+    children: bone.children?.map((c) => c.name).filter(Boolean) || []
+  }));
+  console.table(list);
+  return list;
+};
+
+window.listAnimations = () => {
+  const list = loadedAnimations.map((clip, index) => ({
+    index,
+    name: clip.name,
+    duration: clip.duration,
+    tracks: clip.tracks?.length || 0
+  }));
+  console.table(list);
+  return list;
+};
+
+window.setSkeleton = (patch = {}) => {
+  Object.assign(SKELETON, patch || {});
+  if (activeAnimationAction) {
+    activeAnimationAction.timeScale = SKELETON.timeScale;
+    activeAnimationAction.clampWhenFinished = !!SKELETON.clampWhenFinished;
+    activeAnimationAction.setLoop(getLoopMode(SKELETON.loop), Infinity);
+  }
+  showSkeletonHelper(!!SKELETON.showHelper);
+  console.log('[skeleton settings]', SKELETON);
+};
+
+window.playSkeletonAnimation = (target = 0, options = {}) => {
+  if (!animationMixer || !animationActions.length) {
+    console.warn('[skeleton animation] no animations found in this GLB. Re-export with animation, or check animation count in the exporter.');
+    return null;
+  }
+
+  Object.assign(SKELETON, options || {});
+  const { clip, index } = findAnimation(target);
+  if (!clip || index < 0) {
+    console.warn('[skeleton animation] animation not found:', target);
+    return null;
+  }
+
+  if (activeAnimationAction) activeAnimationAction.fadeOut(0.18);
+
+  const action = animationActions[index];
+  action.reset();
+  action.enabled = true;
+  action.timeScale = Number(SKELETON.timeScale) || 1;
+  action.clampWhenFinished = !!SKELETON.clampWhenFinished;
+  action.setLoop(getLoopMode(SKELETON.loop), Infinity);
+  action.fadeIn(0.18).play();
+
+  activeAnimationAction = action;
+  state.skeletonPaused = false;
+  SKELETON.enabled = true;
+
+  console.log('[skeleton animation play]', { index, name: clip.name, duration: clip.duration, settings: SKELETON });
+  return action;
+};
+
+window.stopSkeletonAnimation = () => {
+  if (activeAnimationAction) {
+    activeAnimationAction.stop();
+    activeAnimationAction = null;
+  }
+  if (animationMixer) animationMixer.stopAllAction();
+  console.log('[skeleton animation stop]');
+};
+
+window.pauseSkeletonAnimation = (paused = true) => {
+  state.skeletonPaused = !!paused;
+  console.log('[skeleton animation paused]', state.skeletonPaused);
+};
+
+window.setAnimationTimeScale = (timeScale = 1) => {
+  SKELETON.timeScale = Number(timeScale) || 1;
+  if (activeAnimationAction) activeAnimationAction.timeScale = SKELETON.timeScale;
+  console.log('[skeleton animation timeScale]', SKELETON.timeScale);
+};
+
+window.showSkeletonHelper = function showSkeletonHelper(visible = true) {
+  SKELETON.showHelper = !!visible;
+
+  if (!avatarRoot) {
+    console.warn('[skeleton helper] avatar not loaded yet.');
+    return;
+  }
+
+  if (SKELETON.showHelper && skeletonHelpers.length === 0) {
+    avatarRoot.traverse((child) => {
+      if (!child.isSkinnedMesh) return;
+      const helper = new THREE.SkeletonHelper(child);
+      helper.material.depthTest = false;
+      helper.material.transparent = true;
+      helper.material.opacity = 0.85;
+      helper.material.color.setHex(SKELETON.helperColor);
+      helper.renderOrder = 999;
+      skeletonHelpers.push(helper);
+      scene.add(helper);
+    });
+  }
+
+  skeletonHelpers.forEach((helper) => { helper.visible = SKELETON.showHelper; });
+  console.log('[skeleton helper visible]', SKELETON.showHelper, 'helpers:', skeletonHelpers.length);
+};
+
+window.setBoneRotation = (boneQuery, rotationDeg = {}, additive = false) => {
+  const bone = findBone(boneQuery);
+  if (!bone) {
+    console.warn('[bone not found]', boneQuery);
+    return null;
+  }
+
+  const rx = THREE.MathUtils.degToRad(Number(rotationDeg.x || 0));
+  const ry = THREE.MathUtils.degToRad(Number(rotationDeg.y || 0));
+  const rz = THREE.MathUtils.degToRad(Number(rotationDeg.z || 0));
+
+  if (additive) {
+    bone.rotation.x += rx;
+    bone.rotation.y += ry;
+    bone.rotation.z += rz;
+  } else {
+    const original = originalBoneTransforms.get(bone.uuid);
+    if (original) bone.rotation.copy(original.rotation);
+    bone.rotation.x += rx;
+    bone.rotation.y += ry;
+    bone.rotation.z += rz;
+  }
+
+  bone.updateMatrixWorld(true);
+  console.log('[bone rotation]', bone.name, {
+    x: THREE.MathUtils.radToDeg(bone.rotation.x),
+    y: THREE.MathUtils.radToDeg(bone.rotation.y),
+    z: THREE.MathUtils.radToDeg(bone.rotation.z)
+  });
+  return bone;
+};
+
+window.setBonePosition = (boneQuery, position = {}, additive = false) => {
+  const bone = findBone(boneQuery);
+  if (!bone) {
+    console.warn('[bone not found]', boneQuery);
+    return null;
+  }
+
+  if (!additive) {
+    const original = originalBoneTransforms.get(bone.uuid);
+    if (original) bone.position.copy(original.position);
+  }
+
+  bone.position.x += Number(position.x || 0);
+  bone.position.y += Number(position.y || 0);
+  bone.position.z += Number(position.z || 0);
+  bone.updateMatrixWorld(true);
+  console.log('[bone position]', bone.name, bone.position);
+  return bone;
+};
+
+window.resetBone = (boneQuery) => {
+  const bone = findBone(boneQuery);
+  if (!bone) {
+    console.warn('[bone not found]', boneQuery);
+    return null;
+  }
+  const original = originalBoneTransforms.get(bone.uuid);
+  if (!original) return bone;
+  bone.position.copy(original.position);
+  bone.rotation.copy(original.rotation);
+  bone.scale.copy(original.scale);
+  bone.updateMatrixWorld(true);
+  console.log('[bone reset]', bone.name);
+  return bone;
+};
+
+window.resetAllBones = () => {
+  bones.forEach((bone) => {
+    const original = originalBoneTransforms.get(bone.uuid);
+    if (!original) return;
+    bone.position.copy(original.position);
+    bone.rotation.copy(original.rotation);
+    bone.scale.copy(original.scale);
+    bone.updateMatrixWorld(true);
+  });
+  console.log('[bones reset all]', bones.length);
+};
+
+function findMouthBone() {
+  if (SKELETON.mouthBoneName) return findBone(SKELETON.mouthBoneName);
+  return findBone('jaw') || findBone('mouth') || findBone('head') || null;
+}
+
+function applySkeletonMouth(open) {
+  if (!SKELETON.mouthBoneEnabled) return;
+  const bone = findMouthBone();
+  if (!bone) return;
+  const original = originalBoneTransforms.get(bone.uuid);
+  if (original) bone.rotation.copy(original.rotation);
+
+  const axis = ['x', 'y', 'z'].includes(SKELETON.mouthBoneAxis) ? SKELETON.mouthBoneAxis : 'x';
+  bone.rotation[axis] += THREE.MathUtils.degToRad((Number(SKELETON.mouthBoneOpenDeg) || 0) * open);
+  bone.updateMatrixWorld(true);
+}
 
 function findMouthMorphMesh(rootObject) {
   let found = null;
@@ -580,7 +969,9 @@ async function loadAvatar() {
       material: child.material?.name || null
     });
   });
+  console.log('[GLB animations]', gltf.animations?.map((clip, index) => ({ index, name: clip.name, duration: clip.duration, tracks: clip.tracks?.length || 0 })) || []);
   console.groupEnd();
+  collectSkeletonData(avatarRoot, gltf.animations || []);
   prepareAvatarMaterials(avatarRoot);
   fitModel(avatarRoot);
   updateCameraView();
@@ -1035,6 +1426,7 @@ function updateMouth(delta, elapsed) {
     setMorph(['mouthFunnel', 'mouthPucker'], open * 0.18);
   }
 
+  applySkeletonMouth(open);
   updateMouthOverlay(open, elapsed);
 }
 
@@ -1168,6 +1560,10 @@ function animate() {
   particles.userData.material.uniforms.uTime.value = elapsed;
   updateCaption(delta * 1000);
   liveLoop(now);
+
+  if (animationMixer && SKELETON.enabled && !state.skeletonPaused) {
+    animationMixer.update(delta * (Number(SKELETON.timeScale) || 1));
+  }
 
   const targetTalk = state.talking ? 1 : state.recording ? 0.35 : 0;
   state.talkLevel += (targetTalk - state.talkLevel) * Math.min(1, delta * 4.5);
