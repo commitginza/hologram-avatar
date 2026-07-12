@@ -5,15 +5,40 @@ const CONFIG = window.HOLOGRAM_CONFIG || {};
 const API_URL = CONFIG.API_URL || '';
 const MODEL_URL = CONFIG.MODEL_URL || 'https://watchimg.s3.ap-northeast-1.amazonaws.com/glb/avatar-v1.glb';
 
+// ===== Avatar / camera preset =====
+// 人型GLBに合わせて、Consoleから位置・角度・カメラ・再フィットを調整できます。
+// 例: window.setAvatarView({ yawDeg: 0, y: -0.6, z: -1.6, cameraZ: 9.5, targetHeight: 4.8 })
 const AVATAR_VIEW = {
-  yawDeg: -90,
+  // モデルの向き。人型で正面が合わない場合は yawDeg を 0 / 90 / -90 / 180 で試してください。
+  yawDeg: 0,
+  pitchDeg: 0,
+  rollDeg: 0,
+
+  // モデル全体の表示位置
   x: 0,
-  y: 1.0,
-  z: -1.2,
-  cameraZ: 7.8,
-  targetHeight: 6.25,
-  idleYawDeg: 1.0,
-  floatAmount: 0.026
+  y: -0.55,
+  z: -1.35,
+
+  // カメラ位置
+  cameraX: 0,
+  cameraY: 0.35,
+  cameraZ: 9.2,
+
+  // カメラの注視点
+  lookAtX: 0,
+  lookAtY: 0.15,
+  lookAtZ: 0,
+
+  // GLBをこの高さに自動フィットします。人型なら 4.3〜5.8 くらいが調整しやすいです。
+  targetHeight: 4.9,
+
+  // フィット後のモデル内部オフセット
+  fitOffsetX: 0,
+  fitOffsetY: -0.55,
+  fitOffsetZ: 0,
+
+  idleYawDeg: 0.35,
+  floatAmount: 0.012
 };
 
 // ===== Mouth overlay preset =====
@@ -21,29 +46,50 @@ const AVATAR_VIEW = {
 // Consoleで window.setMouthOverlay({ y: 2.1, z: -0.4 }) のように微調整できます。
 const MOUTH_OVERLAY = {
   enabled: true,
+  visible: true,
   alwaysVisible: true,
 
+  // root: 画面上の固定位置として重ねる / avatar: アバターグループに追従させる
+  // まずは root 推奨。モデルの回転に合わせたい時だけ avatar を試してください。
+  attachTo: 'root',
+
   // 口位置。x=左右, y=上下, z=手前/奥。
-  // 今のモデル位置に合わせた初期値です。ズレたらConsoleから調整してください。
+  // 人型は顔型より口を小さめ・上寄りにします。
   x: 0.0,
-  y: -0.15,
-  z: -0.55,
+  y: 1.10,
+  z: -0.70,
 
   // 口穴サイズ
-  width: 0.68,
-  closedHeight: 0.010,
-  openHeight: 0.150,
+  width: 0.18,
+  closedHeight: 0.008,
+  openHeight: 0.070,
 
   // 縁取り・動き
   rimOpacity: 0.34,
   openPower: 1.15,
-  moveDownWhileOpen: 0.025,
+  moveDownWhileOpen: 0.012,
   widenWhileOpen: 0.10,
 
   // 音声波形が取得できない時の疑似口パク
   fallbackWaveSpeedA: 11.0,
   fallbackWaveSpeedB: 17.7,
   smooth: 16
+};
+
+// ===== Hologram effect preset =====
+// Consoleで window.setHologram(false) / window.setHologram(true) / window.setHologram({ materialOpacity: 0.4 }) が使えます。
+const HOLOGRAM = {
+  enabled: true,
+  useMaterial: true,
+  useParticles: true,
+  useBase: true,
+  useFog: true,
+  useFlicker: true,
+  materialOpacity: 0.58,
+  materialTalkOpacityBoost: 0.12,
+  materialFlickerAmount: 0.02,
+  emissiveIntensity: 0.018,
+  emissiveTalkBoost: 0.065
 };
 
 const VAD = {
@@ -121,10 +167,12 @@ renderer.outputColorSpace = THREE.SRGBColorSpace;
 stage.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
-scene.fog = new THREE.FogExp2(0x020812, 0.055);
+const HOLOGRAM_FOG = new THREE.FogExp2(0x020812, 0.055);
+scene.fog = HOLOGRAM.useFog ? HOLOGRAM_FOG : null;
 
 const camera = new THREE.PerspectiveCamera(32, stage.clientWidth / stage.clientHeight, 0.1, 100);
-camera.position.set(0, 0.35, AVATAR_VIEW.cameraZ);
+camera.position.set(AVATAR_VIEW.cameraX, AVATAR_VIEW.cameraY, AVATAR_VIEW.cameraZ);
+camera.lookAt(AVATAR_VIEW.lookAtX, AVATAR_VIEW.lookAtY, AVATAR_VIEW.lookAtZ);
 
 const root = new THREE.Group();
 scene.add(root);
@@ -136,9 +184,11 @@ root.add(avatarGroup);
 
 const clock = new THREE.Clock();
 const avatarMaterials = [];
+const originalAvatarMaterials = new Map();
 let avatarRoot = null;
 let baseDisc = null;
 let baseCone = null;
+let projectionBaseGroup = null;
 
 let mouthOverlay = null;
 let mouthHole = null;
@@ -177,34 +227,278 @@ function buildHologramMaterial() {
     roughness: 0.42,
     metalness: 0.0,
     transparent: true,
-    opacity: 0.58,
+    opacity: HOLOGRAM.materialOpacity,
     emissive: 0xeaf8ff,
-    emissiveIntensity: 0.018,
+    emissiveIntensity: HOLOGRAM.emissiveIntensity,
     depthWrite: false,
     side: THREE.FrontSide
   });
 }
 
-function applyHologramMaterial(object) {
+function prepareAvatarMaterials(object) {
   object.traverse((child) => {
     if (!child.isMesh) return;
-    const mat = buildHologramMaterial();
-    child.material = mat;
+    if (!originalAvatarMaterials.has(child)) {
+      originalAvatarMaterials.set(child, child.material);
+    }
     child.frustumCulled = false;
-    child.renderOrder = 1;
-    avatarMaterials.push(mat);
   });
+  setHologramEnabled(HOLOGRAM.enabled, false);
+}
+
+function setHologramEnabled(enabled = true, shouldLog = true) {
+  HOLOGRAM.enabled = !!enabled;
+  avatarMaterials.length = 0;
+
+  if (avatarRoot) {
+    avatarRoot.traverse((child) => {
+      if (!child.isMesh) return;
+
+      if (HOLOGRAM.enabled && HOLOGRAM.useMaterial) {
+        if (!child.userData.hologramMaterial) {
+          child.userData.hologramMaterial = buildHologramMaterial();
+        }
+        child.material = child.userData.hologramMaterial;
+        child.renderOrder = 1;
+        avatarMaterials.push(child.material);
+      } else {
+        child.material = originalAvatarMaterials.get(child) || child.material;
+        child.renderOrder = 0;
+      }
+    });
+  }
+
+  scene.fog = HOLOGRAM.enabled && HOLOGRAM.useFog ? HOLOGRAM_FOG : null;
+  if (particles) particles.visible = HOLOGRAM.enabled && HOLOGRAM.useParticles;
+  if (projectionBaseGroup) projectionBaseGroup.visible = HOLOGRAM.enabled && HOLOGRAM.useBase;
+
+  if (shouldLog) {
+    console.log('[hologram]', {
+      ...HOLOGRAM,
+      avatarMaterialCount: avatarMaterials.length
+    });
+  }
+}
+
+function updateHologramMaterials(elapsed = 0) {
+  if (!HOLOGRAM.enabled || !HOLOGRAM.useMaterial) return;
+
+  for (const mat of avatarMaterials) {
+    mat.transparent = true;
+    mat.depthWrite = false;
+    mat.opacity =
+      HOLOGRAM.materialOpacity +
+      state.talkLevel * HOLOGRAM.materialTalkOpacityBoost +
+      (HOLOGRAM.useFlicker ? Math.sin(elapsed * 5.5) * state.talkLevel * HOLOGRAM.materialFlickerAmount : 0);
+    mat.emissiveIntensity = HOLOGRAM.emissiveIntensity + state.talkLevel * HOLOGRAM.emissiveTalkBoost;
+    mat.needsUpdate = true;
+  }
+}
+
+function updateCameraView() {
+  camera.position.set(AVATAR_VIEW.cameraX, AVATAR_VIEW.cameraY, AVATAR_VIEW.cameraZ);
+  camera.lookAt(AVATAR_VIEW.lookAtX, AVATAR_VIEW.lookAtY, AVATAR_VIEW.lookAtZ);
+  camera.updateProjectionMatrix();
+}
+
+function applyAvatarTransform(elapsed = 0) {
+  const floatY = Math.sin(elapsed * 0.72) * AVATAR_VIEW.floatAmount;
+  const idleYaw = Math.sin(elapsed * 0.18) * THREE.MathUtils.degToRad(AVATAR_VIEW.idleYawDeg);
+
+  avatarGroup.position.set(AVATAR_VIEW.x, AVATAR_VIEW.y + floatY, AVATAR_VIEW.z);
+  avatarGroup.rotation.set(
+    THREE.MathUtils.degToRad(AVATAR_VIEW.pitchDeg || 0),
+    THREE.MathUtils.degToRad(AVATAR_VIEW.yawDeg || 0) + idleYaw,
+    THREE.MathUtils.degToRad(AVATAR_VIEW.rollDeg || 0)
+  );
 }
 
 function fitModel(object) {
+  if (!object) return;
+
+  // 何度でも再フィットできるよう、元のスケール・位置に戻してからBoxを測ります。
+  object.scale.setScalar(1);
+  object.position.set(0, 0, 0);
   object.updateMatrixWorld(true);
+
   const box = new THREE.Box3().setFromObject(object);
   const size = box.getSize(new THREE.Vector3());
   const center = box.getCenter(new THREE.Vector3());
   const scale = AVATAR_VIEW.targetHeight / Math.max(size.y, 0.0001);
+
   object.scale.setScalar(scale);
-  object.position.set(-center.x * scale, -center.y * scale - 0.35, -center.z * scale);
+  object.position.set(
+    -center.x * scale + (AVATAR_VIEW.fitOffsetX || 0),
+    -center.y * scale + (AVATAR_VIEW.fitOffsetY || 0),
+    -center.z * scale + (AVATAR_VIEW.fitOffsetZ || 0)
+  );
+
+  object.updateMatrixWorld(true);
 }
+
+function getAvatarBounds() {
+  if (!avatarRoot) return null;
+  avatarRoot.updateMatrixWorld(true);
+  const box = new THREE.Box3().setFromObject(avatarRoot);
+  const size = box.getSize(new THREE.Vector3());
+  const center = box.getCenter(new THREE.Vector3());
+  return {
+    size: { x: size.x, y: size.y, z: size.z },
+    center: { x: center.x, y: center.y, z: center.z },
+    avatarGroup: {
+      x: avatarGroup.position.x,
+      y: avatarGroup.position.y,
+      z: avatarGroup.position.z,
+      yawDeg: THREE.MathUtils.radToDeg(avatarGroup.rotation.y)
+    }
+  };
+}
+
+window.setAvatarView = (patch = {}) => {
+  Object.assign(AVATAR_VIEW, patch);
+
+  const needsRefit = [
+    'targetHeight',
+    'fitOffsetX',
+    'fitOffsetY',
+    'fitOffsetZ'
+  ].some((key) => Object.prototype.hasOwnProperty.call(patch, key));
+
+  if (needsRefit && avatarRoot) fitModel(avatarRoot);
+
+  updateCameraView();
+  applyAvatarTransform(clock.elapsedTime || 0);
+  updateMouthOverlay(state.mouthOpen || 0, clock.elapsedTime || 0);
+
+  console.log('[avatar view]', AVATAR_VIEW);
+  console.log('[avatar bounds]', getAvatarBounds());
+};
+
+window.refitAvatar = (patch = {}) => {
+  Object.assign(AVATAR_VIEW, patch);
+  if (avatarRoot) fitModel(avatarRoot);
+  updateCameraView();
+  applyAvatarTransform(clock.elapsedTime || 0);
+  console.log('[avatar refit]', AVATAR_VIEW);
+  console.log('[avatar bounds]', getAvatarBounds());
+};
+
+window.setHologram = (enabledOrPatch = true, patch = {}) => {
+  if (typeof enabledOrPatch === 'object') {
+    Object.assign(HOLOGRAM, enabledOrPatch);
+  } else {
+    HOLOGRAM.enabled = !!enabledOrPatch;
+    Object.assign(HOLOGRAM, patch);
+  }
+
+  setHologramEnabled(HOLOGRAM.enabled, true);
+};
+
+window.toggleHologram = () => {
+  window.setHologram(!HOLOGRAM.enabled);
+};
+
+window.getAvatarDebug = () => {
+  const debug = {
+    AVATAR_VIEW: { ...AVATAR_VIEW },
+    MOUTH_OVERLAY: { ...MOUTH_OVERLAY },
+    HOLOGRAM: { ...HOLOGRAM },
+    bounds: getAvatarBounds()
+  };
+  console.log('[avatar debug]', debug);
+  return debug;
+};
+
+window.copyAvatarSettings = async () => {
+  const settings = {
+    AVATAR_VIEW,
+    MOUTH_OVERLAY,
+    HOLOGRAM
+  };
+  const text = JSON.stringify(settings, null, 2);
+  console.log(text);
+
+  try {
+    await navigator.clipboard.writeText(text);
+    console.log('[avatar settings copied]');
+  } catch (_) {
+    console.log('[avatar settings copy failed. copy from console output.]');
+  }
+
+  return settings;
+};
+
+window.applyHumanPreset = () => {
+  window.setAvatarView({
+    yawDeg: 0,
+    pitchDeg: 0,
+    rollDeg: 0,
+    x: 0,
+    y: -0.55,
+    z: -1.35,
+    cameraX: 0,
+    cameraY: 0.35,
+    cameraZ: 9.2,
+    lookAtX: 0,
+    lookAtY: 0.15,
+    lookAtZ: 0,
+    targetHeight: 4.9,
+    fitOffsetX: 0,
+    fitOffsetY: -0.55,
+    fitOffsetZ: 0,
+    idleYawDeg: 0.35,
+    floatAmount: 0.012
+  });
+
+  window.setMouthOverlay({
+    attachTo: 'root',
+    enabled: true,
+    visible: true,
+    x: 0.0,
+    y: 1.10,
+    z: -0.70,
+    width: 0.18,
+    closedHeight: 0.008,
+    openHeight: 0.070,
+    moveDownWhileOpen: 0.012
+  });
+};
+
+window.applyFacePreset = () => {
+  window.setAvatarView({
+    yawDeg: -90,
+    pitchDeg: 0,
+    rollDeg: 0,
+    x: 0,
+    y: 1.0,
+    z: -1.2,
+    cameraX: 0,
+    cameraY: 0.35,
+    cameraZ: 7.8,
+    lookAtX: 0,
+    lookAtY: 0,
+    lookAtZ: 0,
+    targetHeight: 6.25,
+    fitOffsetX: 0,
+    fitOffsetY: -0.35,
+    fitOffsetZ: 0,
+    idleYawDeg: 1.0,
+    floatAmount: 0.026
+  });
+
+  window.setMouthOverlay({
+    attachTo: 'root',
+    enabled: true,
+    visible: true,
+    x: 0.0,
+    y: -0.15,
+    z: -0.55,
+    width: 0.68,
+    closedHeight: 0.010,
+    openHeight: 0.150,
+    moveDownWhileOpen: 0.025
+  });
+};
 
 function findMouthMorphMesh(rootObject) {
   let found = null;
@@ -267,8 +561,10 @@ async function loadAvatar() {
     });
   });
   console.groupEnd();
-  applyHologramMaterial(avatarRoot);
+  prepareAvatarMaterials(avatarRoot);
   fitModel(avatarRoot);
+  updateCameraView();
+  applyAvatarTransform(clock.elapsedTime || 0);
 
   mouthMorphMesh = findMouthMorphMesh(avatarRoot);
   if (mouthMorphMesh) {
@@ -322,6 +618,7 @@ function createBackgroundParticles(count = 180) {
   });
   const points = new THREE.Points(geometry, material);
   points.userData.material = material;
+  points.visible = HOLOGRAM.enabled && HOLOGRAM.useParticles;
   scene.add(points);
   return points;
 }
@@ -329,6 +626,8 @@ const particles = createBackgroundParticles();
 
 function createProjectionBase() {
   const group = new THREE.Group();
+  projectionBaseGroup = group;
+  group.visible = HOLOGRAM.enabled && HOLOGRAM.useBase;
   group.position.set(0, -2.55, 0);
   root.add(group);
   baseDisc = new THREE.Mesh(
@@ -371,6 +670,18 @@ function createEllipseLineGeometry(rx = 0.5, ry = 0.5, segments = 96) {
   return new THREE.BufferGeometry().setFromPoints(points);
 }
 
+function getMouthParent() {
+  return MOUTH_OVERLAY.attachTo === 'avatar' ? avatarGroup : root;
+}
+
+function attachMouthOverlay() {
+  if (!mouthOverlay) return;
+  const parent = getMouthParent();
+  if (mouthOverlay.parent !== parent) {
+    parent.add(mouthOverlay);
+  }
+}
+
 function createMouthOverlay() {
   if (!MOUTH_OVERLAY.enabled) return;
 
@@ -411,13 +722,15 @@ function createMouthOverlay() {
 
   mouthOverlay.add(mouthHole, mouthRim);
 
-  // root直下に置くことで、モデルが多少回転しても口穴は画面正面に残ります。
-  root.add(mouthOverlay);
+  attachMouthOverlay();
   updateMouthOverlay(0, 0);
 }
 
 function updateMouthOverlay(open, elapsed = 0) {
   if (!mouthOverlay || !mouthHole || !mouthRim) return;
+
+  attachMouthOverlay();
+  mouthOverlay.visible = !!MOUTH_OVERLAY.enabled && !!MOUTH_OVERLAY.visible;
 
   const amount = THREE.MathUtils.clamp(open * MOUTH_OVERLAY.openPower, 0, 1);
   const holeHeight = MOUTH_OVERLAY.closedHeight + MOUTH_OVERLAY.openHeight * amount;
@@ -439,8 +752,15 @@ function updateMouthOverlay(open, elapsed = 0) {
 
 window.setMouthOverlay = (patch = {}) => {
   Object.assign(MOUTH_OVERLAY, patch);
+  attachMouthOverlay();
   updateMouthOverlay(state.mouthOpen || 0, clock.elapsedTime || 0);
   console.log('[mouth overlay]', MOUTH_OVERLAY);
+};
+
+window.showMouthOverlay = (visible = true) => {
+  MOUTH_OVERLAY.visible = !!visible;
+  updateMouthOverlay(state.mouthOpen || 0, clock.elapsedTime || 0);
+  console.log('[mouth overlay visible]', MOUTH_OVERLAY.visible);
 };
 
 window.previewMouth = (open = 1) => {
@@ -834,16 +1154,12 @@ function animate() {
   updateMouth(delta, elapsed);
 
   if (avatarRoot) {
-    avatarGroup.position.set(AVATAR_VIEW.x, AVATAR_VIEW.y + Math.sin(elapsed * 0.72) * AVATAR_VIEW.floatAmount, AVATAR_VIEW.z);
-    avatarGroup.rotation.y = THREE.MathUtils.degToRad(AVATAR_VIEW.yawDeg) + Math.sin(elapsed * 0.18) * THREE.MathUtils.degToRad(AVATAR_VIEW.idleYawDeg);
+    applyAvatarTransform(elapsed);
   }
 
-  for (const mat of avatarMaterials) {
-    mat.opacity = 0.56 + state.talkLevel * 0.12 + Math.sin(elapsed * 5.5) * state.talkLevel * 0.02;
-    mat.emissiveIntensity = 0.016 + state.talkLevel * 0.065;
-  }
+  updateHologramMaterials(elapsed);
 
-  if (baseDisc && baseCone) {
+  if (baseDisc && baseCone && HOLOGRAM.enabled && HOLOGRAM.useBase) {
     baseDisc.scale.setScalar(1 + Math.sin(elapsed * 1.7) * 0.035 + state.talkLevel * 0.08);
     baseCone.material.opacity = 0.045 + state.talkLevel * 0.065;
   }
