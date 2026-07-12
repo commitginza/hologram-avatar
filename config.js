@@ -3,5 +3,5 @@ window.HOLOGRAM_CONFIG = {
   API_URL: 'https://gk1qutuk54.execute-api.ap-northeast-1.amazonaws.com/talk',
 
   // S3上のGLB。ファイル名を変えた場合はここを変更してください。
-  MODEL_URL: 'https://watchimg.s3.ap-northeast-1.amazonaws.com/glb/avatar-v2.glb'
+  MODEL_URL: 'https://watchimg.s3.ap-northeast-1.amazonaws.com/glb/avatar-v5.glb'
 };
