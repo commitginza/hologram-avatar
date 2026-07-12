@@ -5,7 +5,7 @@ const CONFIG = window.HOLOGRAM_CONFIG || {};
 const API_URL = CONFIG.API_URL || '';
 const MODEL_URL = CONFIG.MODEL_URL || 'https://watchimg.s3.ap-northeast-1.amazonaws.com/glb/avatar-v1.glb';
 
-const APP_BUILD = 'human-avatar-turn-only-v14-vad-preroll-20260712';
+const APP_BUILD = 'human-avatar-turn-only-v15-preserve-answer-subtitle-20260712';
 window.APP_BUILD = APP_BUILD;
 console.info(`[app.js loaded] ${APP_BUILD}`, import.meta.url);
 
@@ -271,7 +271,15 @@ const WAITING = {
   // 人物を検知した後に自動挨拶を行うか。falseにすると、会話があるまで完全に待機します。
   autoGreetingEnabled: false,
 
-  // TTS再生終了後、少し待ってから「話してよい」表示へ切り替えます。
+  // TTS再生終了後、すぐに待機文で字幕を上書きしないための設定です。
+  // trueの場合、回答後しばらくは最後の回答テキストを画面下部に残します。
+  preserveAnswerText: true,
+
+  // 回答テキストを最低限残す時間。ここを長くすると「お待ちしています」で上書きされにくくなります。
+  minAnswerDisplayMs: 8000,
+
+  // TTS再生終了後、少し待ってから「話してよい」状態へ戻します。
+  // preserveAnswerText=true の場合、statusだけwaitingに戻し、字幕は保持します。
   promptDelayMs: 500,
 
   // 同じ待機文言をDOMへ連続反映しないための間隔。
@@ -283,7 +291,7 @@ const WAITING = {
   noPersonText: 'お客様をお待ちしています。前にお立ちください。',
   preparingText: 'お客様を確認しています。少しお待ちください。',
   readyText: 'お話しください。会話をお待ちしています。',
-  afterAnswerText: '続けてお話しください。お待ちしています。'
+  afterAnswerText: '続けてお話しください。'
 };
 
 const stage = document.getElementById('stage');
@@ -352,6 +360,7 @@ const state = {
   waitingPromptKind: '',
   lastWaitingPromptAt: 0,
   lastSpeechEndedAt: 0,
+  lastAnswerText: '',
 };
 
 const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
@@ -426,8 +435,24 @@ function showWaitingPrompt(kind = 'ready', text = '') {
 
   const now = performance.now();
 
-  // 回答音声が終わった直後は、最後の字幕を一瞬だけ残してから待機表示に切り替える。
+  // 回答音声が終わった直後は、最後の字幕を一瞬だけ残してから待機状態へ戻す。
   if (state.lastSpeechEndedAt && now - state.lastSpeechEndedAt < WAITING.promptDelayMs) return;
+
+  // 回答後すぐに「お待ちしています」などの待機文で字幕を上書きしない。
+  // 例: 「こんにちは」→ AIが返答 → 直後に待機文へ置き換わる、という見え方を防ぎます。
+  if (
+    WAITING.preserveAnswerText &&
+    kind === 'ready' &&
+    state.lastAnswerText &&
+    state.lastSpeechEndedAt &&
+    now - state.lastSpeechEndedAt < WAITING.minAnswerDisplayMs
+  ) {
+    state.waitingPromptKind = kind;
+    state.lastWaitingPromptAt = now;
+    state.waitingForSpeech = true;
+    setStatus(WAITING.waitingStatus);
+    return;
+  }
 
   const message = text || (
     kind === 'noPerson' ? WAITING.noPersonText :
@@ -1795,6 +1820,7 @@ function base64ToArrayBuffer(base64) {
 async function playTts(audioBase64, text) {
   if (!audioBase64) {
     setSubtitle(text);
+    state.lastAnswerText = text;
     state.lastSpeechEndedAt = performance.now();
     return;
   }
@@ -1830,6 +1856,7 @@ async function playTts(audioBase64, text) {
     state.ttsAnalyser = null;
     state.ttsAnalyserData = null;
     updateMouthOverlay(0, clock.elapsedTime || 0);
+    state.lastAnswerText = text;
     state.lastSpeechEndedAt = performance.now();
     setStatus('watching');
     setSubtitle(text);
