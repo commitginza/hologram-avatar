@@ -5,7 +5,7 @@ const CONFIG = window.HOLOGRAM_CONFIG || {};
 const API_URL = CONFIG.API_URL || '';
 const MODEL_URL = CONFIG.MODEL_URL || 'https://watchimg.s3.ap-northeast-1.amazonaws.com/glb/avatar-v1.glb';
 
-const APP_BUILD = 'human-avatar-pose-skeleton-mouth-v3-20260712';
+const APP_BUILD = 'human-avatar-pose-skeleton-mouth-v4-lower-hands-20260712';
 window.APP_BUILD = APP_BUILD;
 console.info(`[app.js loaded] ${APP_BUILD}`, import.meta.url);
 
@@ -124,7 +124,7 @@ const SKELETON = {
 // Boneのローカル軸はモデルごとに違うため、Consoleの window.setBoneRotation() で微調整してください。
 const BONE_POSE = {
   enabled: true,
-  activePreset: 'handsFront',
+  activePreset: 'handsFrontLower',
   autoApplyOnLoad: true,
   stopAnimationOnApply: true,
 
@@ -158,6 +158,31 @@ const BONE_POSE = {
       R_Forearm: { x: 40, y: 0, z: 0 },
       L_Hand: { x: 10, y: 0, z: 0 },
       R_Hand: { x: 10, y: 0, z: 0 }
+    },
+
+    // handsFrontAltよりも腕・手を下げるプリセット。
+    // 現在のモデルでは主にUpperarm.xを増やすと肘が下がり、Forearm.xを増やすと手首側が下がります。
+    handsFrontLower: {
+      L_Clavicle: { x: 0, y: 6, z: 0 },
+      R_Clavicle: { x: 0, y: -6, z: 0 },
+      L_Upperarm: { x: 84, y: 0, z: 0 },
+      R_Upperarm: { x: 84, y: 0, z: 0 },
+      L_Forearm: { x: 58, y: 0, z: 0 },
+      R_Forearm: { x: 58, y: 0, z: 0 },
+      L_Hand: { x: 14, y: 0, z: 0 },
+      R_Hand: { x: 14, y: 0, z: 0 }
+    },
+
+    // さらに下げたい場合の強めプリセット。
+    handsFrontVeryLower: {
+      L_Clavicle: { x: 0, y: 6, z: 0 },
+      R_Clavicle: { x: 0, y: -6, z: 0 },
+      L_Upperarm: { x: 94, y: 0, z: 0 },
+      R_Upperarm: { x: 94, y: 0, z: 0 },
+      L_Forearm: { x: 70, y: 0, z: 0 },
+      R_Forearm: { x: 70, y: 0, z: 0 },
+      L_Hand: { x: 18, y: 0, z: 0 },
+      R_Hand: { x: 18, y: 0, z: 0 }
     }
   }
 };
@@ -1026,6 +1051,8 @@ window.applyBonePose = (presetName = BONE_POSE.activePreset, options = {}) => {
 
 window.applyHandsFrontPose = (options = {}) => window.applyBonePose('handsFront', options);
 window.applyHandsFrontAltPose = (options = {}) => window.applyBonePose('handsFrontAlt', options);
+window.applyHandsFrontLowerPose = (options = {}) => window.applyBonePose('handsFrontLower', options);
+window.applyHandsFrontVeryLowerPose = (options = {}) => window.applyBonePose('handsFrontVeryLower', options);
 
 window.setBonePosePreset = (name, preset) => {
   if (!name || !preset || typeof preset !== 'object') {
@@ -1829,6 +1856,8 @@ window.checkAvatarConsoleFunctions = () => {
     'showSkeletonHelper',
     'applyHandsFrontPose',
     'applyHandsFrontAltPose',
+    'applyHandsFrontLowerPose',
+    'applyHandsFrontVeryLowerPose',
     'setBonePosePreset',
     'getCurrentBoneRotations',
     'setMouthBone',
