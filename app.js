@@ -1646,7 +1646,7 @@ function stopSpeechSegment() {
   if (!state.recorder || !state.recording || state.recorder.state === 'inactive') return;
   clearWaitingPrompt();
   setStatus('thinking');
-  setSubtitle('少々お待ちください。');
+  setSubtitle('ただいま内容を確認していますので、今しばらくお待ちください。');
   state.recorder.stop();
 }
 
