@@ -5,7 +5,7 @@ const CONFIG = window.HOLOGRAM_CONFIG || {};
 const API_URL = CONFIG.API_URL || '';
 const MODEL_URL = CONFIG.MODEL_URL || 'https://watchimg.s3.ap-northeast-1.amazonaws.com/glb/avatar-v1.glb';
 
-const APP_BUILD = 'human-avatar-turn-only-v12-20260712';
+const APP_BUILD = 'human-avatar-turn-only-v13-original-colors-20260712';
 window.APP_BUILD = APP_BUILD;
 console.info(`[app.js loaded] ${APP_BUILD}`, import.meta.url);
 
@@ -66,7 +66,7 @@ const MOUTH_OVERLAY = {
   // 口穴サイズ
   width: 0.08,
   closedHeight: 0.008,
-  openHeight: 0.03,
+  openHeight: 0.07,
 
   // 縁取り・動き
   rimOpacity: 0.34,
@@ -81,7 +81,8 @@ const MOUTH_OVERLAY = {
 };
 
 // ===== Hologram effect preset =====
-// Consoleで window.setHologram(false) / window.setHologram(true) / window.setHologram({ materialOpacity: 0.4 }) が使えます。
+// 初期状態ではホログラム処理を完全OFFにし、GLB本来のカラーで表示します。
+// Consoleで確認したい場合だけ window.setHologram(true) を使えます。
 const HOLOGRAM = {
   enabled: false,
   useMaterial: true,
@@ -107,8 +108,9 @@ const HOLOGRAM = {
 //   skeleton          : メッシュを非表示にしてSkeletonHelperだけ表示
 //   wireframeSkeleton : ワイヤーフレーム + SkeletonHelper
 const MODEL_DISPLAY = {
-  // 初期表示は「元テクスチャありのホログラム風」にします。
-  mode: 'texturedHologram',
+  // 初期表示はGLB本来の色付きMaterialをそのまま使います。
+  // ホログラム/中立色/スケルトン表示は初期状態では使いません。
+  mode: 'original',
   showSkeletonHelper: false,
 
   // neutral / skeleton系表示用
