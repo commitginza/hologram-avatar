@@ -66,7 +66,7 @@ const MOUTH_OVERLAY = {
   // 口穴サイズ
   width: 0.08,
   closedHeight: 0.008,
-  openHeight: 0.07,
+  openHeight: 0.03,
 
   // 縁取り・動き
   rimOpacity: 0.34,
