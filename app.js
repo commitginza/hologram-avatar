@@ -5,7 +5,7 @@ const CONFIG = window.HOLOGRAM_CONFIG || {};
 const API_URL = CONFIG.API_URL || '';
 const MODEL_URL = CONFIG.MODEL_URL || 'https://watchimg.s3.ap-northeast-1.amazonaws.com/glb/avatar-v1.glb';
 
-const APP_BUILD = 'human-avatar-pose-skeleton-mouth-v4-lower-hands-20260712';
+const APP_BUILD = 'human-avatar-pose-skeleton-mouth-v5-requested-pose-20260712';
 window.APP_BUILD = APP_BUILD;
 console.info(`[app.js loaded] ${APP_BUILD}`, import.meta.url);
 
@@ -26,7 +26,7 @@ const AVATAR_VIEW = {
   // カメラ位置
   cameraX: 0,
   cameraY: 0.35,
-  cameraZ: 4.8,
+  cameraZ: 3.8,
 
   // カメラの注視点
   lookAtX: 0,
@@ -42,7 +42,7 @@ const AVATAR_VIEW = {
   fitOffsetZ: 0,
 
   idleYawDeg: 0.35,
-  floatAmount: 0.01
+  floatAmount: 0
 };
 
 // ===== Mouth overlay preset =====
@@ -60,13 +60,13 @@ const MOUTH_OVERLAY = {
 
   // 口位置。x=左右, y=上下, z=手前/奥。
   x: 0,
-  y: 0.78,
+  y: 0.84,
   z: -0.7,
 
   // 口穴サイズ
-  width: 0.08,
+  width: 0.18,
   closedHeight: 0.008,
-  openHeight: 0.27,
+  openHeight: 0.07,
 
   // 縁取り・動き
   rimOpacity: 0.34,
@@ -124,7 +124,7 @@ const SKELETON = {
 // Boneのローカル軸はモデルごとに違うため、Consoleの window.setBoneRotation() で微調整してください。
 const BONE_POSE = {
   enabled: true,
-  activePreset: 'handsFrontLower',
+  activePreset: 'requestedHandsFront',
   autoApplyOnLoad: true,
   stopAnimationOnApply: true,
 
@@ -183,6 +183,18 @@ const BONE_POSE = {
       R_Forearm: { x: 70, y: 0, z: 0 },
       L_Hand: { x: 18, y: 0, z: 0 },
       R_Hand: { x: 18, y: 0, z: 0 }
+    },
+
+    // ユーザー調整済みの確定ポーズ。初期表示時に自動適用します。
+    requestedHandsFront: {
+      L_Clavicle: { x: 0, y: 0, z: 8 },
+      R_Clavicle: { x: 0, y: 0, z: -8 },
+      L_Upperarm: { x: 4, y: -35, z: -80 },
+      R_Upperarm: { x: 4, y: 35, z: 76 },
+      L_Forearm: { x: 0, y: 20, z: -35 },
+      R_Forearm: { x: 0, y: -40, z: 45 },
+      L_Hand: { x: 0, y: 50, z: -30 },
+      R_Hand: { x: 15, y: -50, z: 22 }
     }
   }
 };
@@ -523,7 +535,8 @@ window.copyAvatarSettings = async () => {
     AVATAR_VIEW,
     MOUTH_OVERLAY,
     HOLOGRAM,
-    SKELETON
+    SKELETON,
+    BONE_POSE
   };
   const text = JSON.stringify(settings, null, 2);
   console.log(text);
@@ -548,7 +561,7 @@ window.applyHumanPreset = () => {
     z: -1.35,
     cameraX: 0,
     cameraY: 0.35,
-    cameraZ: 4.8,
+    cameraZ: 3.8,
     lookAtX: 0,
     lookAtY: 0.15,
     lookAtZ: 0,
@@ -557,7 +570,7 @@ window.applyHumanPreset = () => {
     fitOffsetY: -0.55,
     fitOffsetZ: 0,
     idleYawDeg: 0.35,
-    floatAmount: 0.01
+    floatAmount: 0
   });
 
   window.setMouthOverlay({
@@ -604,6 +617,10 @@ window.applyHumanPreset = () => {
     clampWhenFinished: false,
     showHelper: false
   });
+
+  if (window.applyRequestedHandsPose) {
+    window.applyRequestedHandsPose({ resetFirst: true });
+  }
 };
 
 window.applyFacePreset = () => {
@@ -1053,6 +1070,7 @@ window.applyHandsFrontPose = (options = {}) => window.applyBonePose('handsFront'
 window.applyHandsFrontAltPose = (options = {}) => window.applyBonePose('handsFrontAlt', options);
 window.applyHandsFrontLowerPose = (options = {}) => window.applyBonePose('handsFrontLower', options);
 window.applyHandsFrontVeryLowerPose = (options = {}) => window.applyBonePose('handsFrontVeryLower', options);
+window.applyRequestedHandsPose = (options = {}) => window.applyBonePose('requestedHandsFront', options);
 
 window.setBonePosePreset = (name, preset) => {
   if (!name || !preset || typeof preset !== 'object') {
@@ -1858,6 +1876,7 @@ window.checkAvatarConsoleFunctions = () => {
     'applyHandsFrontAltPose',
     'applyHandsFrontLowerPose',
     'applyHandsFrontVeryLowerPose',
+    'applyRequestedHandsPose',
     'setBonePosePreset',
     'getCurrentBoneRotations',
     'setMouthBone',
